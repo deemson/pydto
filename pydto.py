@@ -1,14 +1,4 @@
-from contextlib import contextmanager
 from datetime import datetime
-
-
-@contextmanager
-def raises(exc, msg=None):
-    try:
-        yield
-    except exc as e:
-        if msg is not None:
-            assert str(e) == msg, '%r != %r' % (str(e), msg)
 
 
 class Error(Exception):
@@ -74,12 +64,16 @@ class MultipleInvalid(Invalid):
         return str(self.errors[0])
 
 
-class RequiredFieldInvalid(Invalid):
+class RequiredInvalid(Invalid):
     """Required field was missing."""
 
 
-class UnknownFieldInvalid(Invalid):
+class UnknownInvalid(Invalid):
     """The key was not found in the schema."""
+
+
+class TypeInvalid(Invalid):
+    """The value found was not of required type."""
 
 
 class DictInvalid(Invalid):
@@ -154,18 +148,122 @@ class Converter(object):
 class String(Converter):
     """
 
-    Marks a field in a schema as a simple string field:
+    Marks a field in a schema as a string field:
 
     >>> schema = Schema({Required('aString'): String()})
     >>> result = schema.to_native({'aString': 'just a simple string'})
     >>> assert 'aString' in result
     >>> assert result['aString'] == 'just a simple string'
     """
+
     def to_native(self, data):
         return self.to_dto(data)
 
     def to_dto(self, data):
         return str(data)
+
+
+class Integer(Converter):
+    """
+
+    Marks a field in a schema as an integer number field:
+
+    >>> schema = Schema({Required('anInt'): Integer()})
+    >>> result = schema.to_native({'anInt': 5})
+    >>> assert 'anInt' in result
+    >>> result['anInt']
+    5
+    >>> result = schema.to_native({'anInt': '5'})
+    >>> assert 'anInt' in result
+    >>> result['anInt']
+    5
+
+    Will raise TypeInvalid when supplied value is not an integer number:
+
+    >>> try:
+    ...     result = schema.to_native({'anInt': 'a'})
+    ...     assert False, 'an exception should be raised'
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], TypeInvalid)
+    ...     assert e.errors[0].path == ['anInt'], '%r' % e.errors[0].path
+
+
+    """
+
+    def to_native(self, data):
+        return self.to_dto(data)
+
+    def to_dto(self, data):
+        try:
+            return int(data)
+        except (TypeError, ValueError):
+            raise TypeInvalid('expected an integer, got {!r} instead'.format(data))
+
+
+class Boolean(Converter):
+    """
+
+    Marks a field in a schema as a boolean field:
+
+    >>> schema = Schema({Required('aBool'): Boolean()})
+    >>> result = schema.to_native({'aBool': True})
+    >>> assert 'aBool' in result
+    >>> result['aBool']
+    True
+    >>> result = schema.to_native({'aBool': 'y'})
+    >>> assert 'aBool' in result
+    >>> result['aBool']
+    True
+
+    However if a value is passed to a strict Boolean (which it is by default) that not one of TRUTH_VALUES
+    or FALSE_VALUES, then a TypeInvalid exception is raised:
+
+    >>> try:
+    ...     result = schema.to_native({'aBool': 'a'})
+    ...     assert False, 'an exception should be raised'
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], TypeInvalid)
+    ...     assert e.errors[0].path == ['aBool'], '%r' % e.errors[0].path
+
+    """
+    TRUTH_VALUES = ['true', 't', 'yes', 'y', '1']
+    FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
+
+
+    def __init__(self, strict=True):
+        """
+        :param strict: when True, values supplied to this converter are expected to
+         be in either TRUE_VALUES or FALSE_VALUES. Setting this to False will force Boolean to conform to
+         default Python truth rules.
+        """
+        self.strict = strict
+
+
+    def to_dto(self, data):
+        if self.strict:
+            if data not in [True, False]:
+                raise TypeInvalid('{!r} is not a boolean'.format(data))
+            return data
+        else:
+            return bool(data)
+
+
+    def to_native(self, data):
+        if data in [True, False]:
+            return data
+        else:
+            if self.strict:
+                data = str(data)
+                if data in self.TRUTH_VALUES:
+                    return True
+                elif data in self.FALSE_VALUES:
+                    return False
+                else:
+                    raise TypeInvalid(
+                        'a strict boolean should be either one of {!r} or one of {!r}'.format(self.TRUTH_VALUES,
+                                                                                              self.FALSE_VALUES))
+            else:
+                return bool(data)
 
 
 class DateTime(Converter):
@@ -174,18 +272,55 @@ class DateTime(Converter):
     Marks a field in a schema as a datetime field:
 
     >>> schema = Schema({Required('aDate'): DateTime('%Y-%m-%d %H:%M.%S')})
-    >>> result = schema.to_native({'aDate': '2000-02-15 15:34.40'})
+    >>> result = schema.to_native({'aDate': '2000-02-14 15:34.40'})
     >>> assert 'aDate' in result
-    >>> assert result['aDate'] == datetime(2000, 2, 15, 15, 34, 40)
+    >>> assert result['aDate'] == datetime(2000, 2, 14, 15, 34, 40)
+    >>> result = schema.to_dto({'aDate': datetime(2000, 2, 13, 15, 34, 40)})
+    >>> assert 'aDate' in result
+    >>> assert result['aDate'] == '2000-02-13 15:34.40'
+
+    Will raise a SchemaError upon initialization if the datetime format string is incorrect:
+
+    >>> try:
+    ...     schema = Schema({Required('aDate'): DateTime('%#')})
+    ...     assert False, 'an exception should be raised'
+    ... except SchemaError:
+    ...     pass
+
+    Will raise TypeInvalid when supplied with a bad datetime string or bad datetime object:
+
+    >>> schema = Schema({Required('aDate'): DateTime('%Y')})
+    >>> try:
+    ...     result = schema.to_native({'aDate': 'X'})
+    ...     assert False, 'an exception should be raised'
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], TypeInvalid)
+    ...     assert e.errors[0].path == ['aDate'], '%r' % e.errors[0].path
+    >>> try:
+    ...     result = schema.to_dto({'aDate': None})
+    ...     assert False, 'an exception should be raised'
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], TypeInvalid)
+    ...     assert e.errors[0].path == ['aDate'], '%r' % e.errors[0].path
     """
+
     def __init__(self, datetime_format):
+        try:
+            datetime.strptime(datetime.utcnow().strftime(datetime_format), datetime_format)
+        except (TypeError, ValueError) as e:
+            raise SchemaError('bad datetime format {!r}: {}'.format(datetime_format, e))
         self.datetime_format = datetime_format
 
     def to_native(self, data):
-        return datetime.strptime(data, self.datetime_format)
+        try:
+            return datetime.strptime(data, self.datetime_format)
+        except (TypeError, ValueError) as e:
+            raise TypeInvalid('bad datetime {!r}: {!r}'.format(data, e))
 
     def to_dto(self, data):
-        return str(data)
+        if not isinstance(data, datetime):
+            raise TypeInvalid('bad datetime object {!r}'.format(data))
+        return data.strftime(self.datetime_format)
 
 
 class Dict(Converter):
@@ -220,22 +355,40 @@ class Dict(Converter):
         required_fields = self.to_native_required_fields if to_native else self.to_dto_required_fields
         optional_fields = self.to_native_optional_fields if to_native else self.to_dto_optional_fields
         for key, (substitution_key, converter) in required_fields.iteritems():
-            if key in data:
-                if to_native:
-                    result[substitution_key] = converter.to_native(data.pop(key))
+            try:
+                if key in data:
+                    if to_native:
+                        result[substitution_key] = converter.to_native(data.pop(key))
+                    else:
+                        result[substitution_key] = converter.to_dto(data.pop(key))
                 else:
-                    result[substitution_key] = converter.to_dto(data.pop(key))
-            else:
-                errors.append(RequiredFieldInvalid('required field is missing', [key]))
+                    errors.append(RequiredInvalid('required field is missing', [key]))
+            except MultipleInvalid as e:
+                errs = [e for e in e.errors]
+                for e in errs:
+                    e.path = [key] + e.path
+                errors.extend(errs)
+            except Invalid as e:
+                e.path = [key] + e.path
+                errors.append(e)
         for data_key, data_value in data.iteritems():
-            if data_key not in optional_fields:
-                errors.append(UnknownFieldInvalid('encountered an unknown field', [data_key]))
-            else:
-                substitution_key, converter = optional_fields[data_key]
-                if to_native:
-                    result[substitution_key] = converter.to_native(data_value)
+            try:
+                if data_key not in optional_fields:
+                    errors.append(UnknownInvalid('encountered an unknown field', [data_key]))
                 else:
-                    result[substitution_key] = converter.to_dto(data_value)
+                    substitution_key, converter = optional_fields[data_key]
+                    if to_native:
+                        result[substitution_key] = converter.to_native(data_value)
+                    else:
+                        result[substitution_key] = converter.to_dto(data_value)
+            except MultipleInvalid as e:
+                errs = [e for e in e.errors]
+                for e in errs:
+                    e.path = [data_key] + e.path
+                errors.extend(errs)
+            except Invalid as e:
+                e.path = [data_key] + e.path
+                errors.append(e)
         if errors:
             raise MultipleInvalid(errors)
         return result
