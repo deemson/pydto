@@ -497,9 +497,9 @@ class Dict(Converter):
         >>> assert isinstance(mocked_dict, dict)
         """
         result = {}
-        for k, (_, converter) in self.to_native_required_fields.iteritems():
+        for k, converter in self.to_native_required_fields.values():
             result[k] = converter.mock()
-        for k, (_, converter) in self.to_native_optional_fields.iteritems():
+        for k, converter in self.to_native_optional_fields.values():
             if random.choice((True, False)):
                 result[k] = converter.mock()
         return result
