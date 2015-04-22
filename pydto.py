@@ -107,10 +107,20 @@ class Schema(object):
         return Dict(schema)
 
     def to_dto(self, data):
-        return self.schema.to_dto(data)
+        try:
+            return self.schema.to_dto(data)
+        except MultipleInvalid:
+            raise
+        except Invalid as e:
+            raise MultipleInvalid([e])
 
     def to_native(self, data):
-        return self.schema.to_native(data)
+        try:
+            return self.schema.to_native(data)
+        except MultipleInvalid:
+            raise
+        except Invalid as e:
+            raise MultipleInvalid([e])
 
 
 class Marker(object):
