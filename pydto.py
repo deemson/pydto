@@ -1,4 +1,6 @@
 from datetime import datetime
+import random
+import string
 
 
 class Error(Exception):
@@ -154,6 +156,9 @@ class Converter(object):
     def to_native(self, data):
         raise NotImplementedError()
 
+    def mock(self):
+        raise NotImplementedError()
+
 
 class String(Converter):
     """
@@ -171,6 +176,13 @@ class String(Converter):
 
     def to_dto(self, data):
         return str(data)
+
+    def mock(self):
+        """
+        >>> mocked_string = String().mock()
+        >>> assert isinstance(mocked_string, str)
+        """
+        return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
 
 
 class Integer(Converter):
@@ -208,6 +220,13 @@ class Integer(Converter):
             return int(data)
         except (TypeError, ValueError):
             raise TypeInvalid('expected an integer, got {!r} instead'.format(data))
+
+    def mock(self):
+        """
+        >>> mocked_int = Integer().mock()
+        >>> assert isinstance(mocked_int, int)
+        """
+        return random.randint(-1000, 1000)
 
 
 class Boolean(Converter):
@@ -248,7 +267,6 @@ class Boolean(Converter):
         """
         self.strict = strict
 
-
     def to_dto(self, data):
         if self.strict:
             if data not in [True, False]:
@@ -256,7 +274,6 @@ class Boolean(Converter):
             return data
         else:
             return bool(data)
-
 
     def to_native(self, data):
         if data in [True, False]:
@@ -274,6 +291,13 @@ class Boolean(Converter):
                                                                                               self.FALSE_VALUES))
             else:
                 return bool(data)
+
+    def mock(self):
+        """
+        >>> mocked_bool = Boolean().mock()
+        >>> assert isinstance(mocked_bool, bool)
+        """
+        return random.choice((True, False))
 
 
 class DateTime(Converter):
@@ -314,7 +338,7 @@ class DateTime(Converter):
     ...     assert e.errors[0].path == ['aDate'], '%r' % e.errors[0].path
     """
 
-    def __init__(self, datetime_format):
+    def __init__(self, datetime_format='%Y-%m-%d %H:%M.%S'):
         try:
             datetime.strptime(datetime.utcnow().strftime(datetime_format), datetime_format)
         except (TypeError, ValueError) as e:
@@ -331,6 +355,20 @@ class DateTime(Converter):
         if not isinstance(data, datetime):
             raise TypeInvalid('bad datetime object {!r}'.format(data))
         return data.strftime(self.datetime_format)
+
+    def mock(self):
+        """
+        >>> mocked_dt = DateTime().mock()
+        >>> assert isinstance(mocked_dt, datetime)
+        """
+        return datetime(
+            random.randint(2000, 2020),
+            random.randint(1, 12),
+            random.randint(1, 28),
+            random.randint(0, 23),
+            random.randint(0, 59),
+            random.randint(0, 59)
+        )
 
 
 class Dict(Converter):
@@ -403,6 +441,19 @@ class Dict(Converter):
             raise MultipleInvalid(errors)
         return result
 
+    def mock(self):
+        """
+        >>> mocked_dict = Dict({Required('a'): DateTime(), Optional('b'): String()}).mock()
+        >>> assert isinstance(mocked_dict, dict)
+        """
+        result = {}
+        for k, (_, converter) in self.to_native_required_fields.iteritems():
+            result[k] = converter.mock()
+        for k, (_, converter) in self.to_native_optional_fields.iteritems():
+            if random.choice((True, False)):
+                result[k] = converter.mock()
+        return result
+
 
 class List(Converter):
     def __init__(self, inner_schema):
@@ -417,3 +468,12 @@ class List(Converter):
         if not isinstance(data, dict):
             raise ListInvalid('expected a list')
         return [self.inner_schema.to_native(d) for d in data]
+
+    def mock(self):
+        """
+        >>> mocked_list = List(String()).mock()
+        >>> assert isinstance(mocked_list, list)
+        """
+
+        return [self.inner_schema.mock() for _ in range(random.randrange(5))]
+
