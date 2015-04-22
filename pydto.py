@@ -509,15 +509,31 @@ class List(Converter):
     def __init__(self, inner_schema):
         self.inner_schema = inner_schema
 
-    def to_dto(self, data):
+    def _convert_list(self, data, to_native):
         if not isinstance(data, list):
             raise ListInvalid('expected a list')
-        return [self.inner_schema.to_dto(d) for d in data]
+        result = []
+        errors = []
+        for idx, d in enumerate(data):
+            try:
+                if to_native:
+                    result.append(self.inner_schema.to_native(d))
+                else:
+                    result.append(self.inner_schema.to_dto(d))
+            except MultipleInvalid as e:
+                errs = [e for e in e.errors]
+                for e in errs:
+                    e.path = [idx] + e.path
+                errors.extend(errs)
+            except Invalid as e:
+                e.path = [idx] + e.path
+                errors.append(e)
+
+    def to_dto(self, data):
+        return self._convert_list(data, False)
 
     def to_native(self, data):
-        if not isinstance(data, list):
-            raise ListInvalid('expected a list')
-        return [self.inner_schema.to_native(d) for d in data]
+        return self._convert_list(data, True)
 
     def mock(self):
         """
