@@ -528,6 +528,9 @@ class List(Converter):
             except Invalid as e:
                 e.path = [idx] + e.path
                 errors.append(e)
+        if errors:
+            raise MultipleInvalid(errors)
+        return result
 
     def to_dto(self, data):
         return self._convert_list(data, False)
