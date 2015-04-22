@@ -96,6 +96,9 @@ class Schema(object):
         elif isinstance(schema, Dict):
             schema.inner_schema = self._compile_schema(schema.inner_schema)
             return schema
+        elif isinstance(schema, List):
+            schema.inner_schema = self._compile_schema(schema.inner_schema)
+            return schema
         elif isinstance(schema, Converter):
             return schema
         else:
@@ -123,6 +126,9 @@ class Schema(object):
             raise
         except Invalid as e:
             raise MultipleInvalid([e])
+
+    def mock(self):
+        return self.schema.mock()
 
 
 class Marker(object):
@@ -443,7 +449,7 @@ class Dict(Converter):
 
     def mock(self):
         """
-        >>> mocked_dict = Dict({Required('a'): DateTime(), Optional('b'): String()}).mock()
+        >>> mocked_dict = Schema({Required('a'): DateTime(), Optional('b'): String()}).mock()
         >>> assert isinstance(mocked_dict, dict)
         """
         result = {}
@@ -471,7 +477,7 @@ class List(Converter):
 
     def mock(self):
         """
-        >>> mocked_list = List(String()).mock()
+        >>> mocked_list = Schema(List({Required('a'): DateTime(), Optional('b'): String()})).mock()
         >>> assert isinstance(mocked_list, list)
         """
 
