@@ -1,4 +1,5 @@
 from datetime import datetime
+import decimal
 import random
 import string
 
@@ -375,6 +376,49 @@ class DateTime(Converter):
             random.randint(0, 59),
             random.randint(0, 59)
         )
+
+
+class Decimal(Converter):
+    """
+
+    Marks a field in a schema as a decimal field:
+
+    >>> schema = Schema({Required('aDec'): Decimal()})
+    >>> result = schema.to_native({'aDec': '156.15'})
+    >>> assert 'aDec' in result
+    >>> assert result['aDec'] == decimal.Decimal('156.15')
+    >>> result = schema.to_dto({'aDec': decimal.Decimal('123.123')})
+    >>> assert 'aDec' in result
+    >>> assert result['aDec'] == '123.123'
+
+    Will raise TypeInvalid when supplied with a bad decimal string:
+
+    >>> schema = Schema({Required('aDec'): Decimal()})
+    >>> try:
+    ...     result = schema.to_native({'aDec': 'asd'})
+    ...     assert False, 'an exception should be raised'
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], TypeInvalid)
+    ...     assert e.errors[0].path == ['aDec'], '%r' % e.errors[0].path
+    """
+
+    def to_native(self, data):
+        try:
+            return decimal.Decimal(data)
+        except (TypeError, ValueError, decimal.DecimalException) as e:
+            raise TypeInvalid('bad decimal number {!r}: {!r}'.format(data, e))
+
+    def to_dto(self, data):
+        if not isinstance(data, decimal.Decimal):
+            raise TypeInvalid('bad decimal number {!r}'.format(data))
+        return str(data)
+
+    def mock(self):
+        """
+        >>> mocked_decimal = Decimal().mock()
+        >>> assert isinstance(mocked_decimal, decimal.Decimal)
+        """
+        return decimal.Decimal(random.randrange(10000)) / 100
 
 
 class Dict(Converter):
