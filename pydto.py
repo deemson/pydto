@@ -510,12 +510,12 @@ class List(Converter):
         self.inner_schema = inner_schema
 
     def to_dto(self, data):
-        if not isinstance(data, dict):
+        if not isinstance(data, list):
             raise ListInvalid('expected a list')
         return [self.inner_schema.to_dto(d) for d in data]
 
     def to_native(self, data):
-        if not isinstance(data, dict):
+        if not isinstance(data, list):
             raise ListInvalid('expected a list')
         return [self.inner_schema.to_native(d) for d in data]
 
@@ -525,5 +525,5 @@ class List(Converter):
         >>> assert isinstance(mocked_list, list)
         """
 
-        return [self.inner_schema.mock() for _ in range(random.randrange(5))]
+        return [self.inner_schema.mock() for _ in range(random.randrange(3) + 1)]
 
