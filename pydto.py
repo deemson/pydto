@@ -112,7 +112,7 @@ class Schema(object):
         elif isinstance(schema, Converter):
             return schema
         else:
-            raise SchemaError('{} is not a valid value in schema'.format(type(schema)))
+            raise SchemaError('%s is not a valid value in schema' % type(schema))
 
     def _compile_dict(self, schema):
         for key, inner_schema in iteritems(schema):
@@ -235,7 +235,7 @@ class Integer(Converter):
         try:
             return int(data)
         except (TypeError, ValueError):
-            raise TypeInvalid('expected an integer, got {!r} instead'.format(data))
+            raise TypeInvalid('expected an integer, got %r instead' % data)
 
     def mock(self):
         """
@@ -286,7 +286,7 @@ class Boolean(Converter):
     def to_dto(self, data):
         if self.strict:
             if data not in [True, False]:
-                raise TypeInvalid('{!r} is not a boolean'.format(data))
+                raise TypeInvalid('%r is not a boolean' % data)
             return data
         else:
             return bool(data)
@@ -303,8 +303,9 @@ class Boolean(Converter):
                     return False
                 else:
                     raise TypeInvalid(
-                        'a strict boolean should be either one of {!r} or one of {!r}'.format(self.TRUTH_VALUES,
-                                                                                              self.FALSE_VALUES))
+                        'a strict boolean should be either one of %r or one of %r'
+                        % (self.TRUTH_VALUES, self.FALSE_VALUES)
+                    )
             else:
                 return bool(data)
 
@@ -358,18 +359,18 @@ class DateTime(Converter):
         try:
             datetime.strptime(datetime.utcnow().strftime(datetime_format), datetime_format)
         except (TypeError, ValueError) as e:
-            raise SchemaError('bad datetime format {!r}: {}'.format(datetime_format, e))
+            raise SchemaError('bad datetime format %r: %r' % (datetime_format, e))
         self.datetime_format = datetime_format
 
     def to_native(self, data):
         try:
             return datetime.strptime(data, self.datetime_format)
         except (TypeError, ValueError) as e:
-            raise TypeInvalid('bad datetime {!r}: {!r}'.format(data, e))
+            raise TypeInvalid('bad datetime %r: %r' % (data, e))
 
     def to_dto(self, data):
         if not isinstance(data, datetime):
-            raise TypeInvalid('bad datetime object {!r}'.format(data))
+            raise TypeInvalid('bad datetime object %r ' % data)
         return data.strftime(self.datetime_format)
 
     def mock(self):
@@ -415,11 +416,11 @@ class Decimal(Converter):
         try:
             return decimal.Decimal(data)
         except (TypeError, ValueError, decimal.DecimalException) as e:
-            raise TypeInvalid('bad decimal number {!r}: {!r}'.format(data, e))
+            raise TypeInvalid('bad decimal number %r: %r' % (data, e))
 
     def to_dto(self, data):
         if not isinstance(data, decimal.Decimal):
-            raise TypeInvalid('bad decimal number {!r}'.format(data))
+            raise TypeInvalid('bad decimal number %r' % data)
         return str(data)
 
     def mock(self):
