@@ -2,6 +2,15 @@ from datetime import datetime
 import decimal
 import random
 import string
+import sys
+
+if sys.version_info >= (3,):
+    iteritems = dict.items
+else:
+    iteritems = dict.iteritems
+
+__author__ = 'Dmitry Kurkin'
+__version__ = '0.0.1'
 
 
 class Error(Exception):
@@ -106,7 +115,7 @@ class Schema(object):
             raise SchemaError('{} is not a valid value in schema'.format(type(schema)))
 
     def _compile_dict(self, schema):
-        for key, inner_schema in schema.iteritems():
+        for key, inner_schema in iteritems(schema):
             if not isinstance(key, Marker):
                 raise SchemaError('keys in schema should be instances of Marker class')
             schema[key] = self._compile_schema(inner_schema)
@@ -430,7 +439,7 @@ class Dict(Converter):
         self.to_native_optional_fields = {}
         self.to_dto_required_fields = {}
         self.to_dto_optional_fields = {}
-        for key, value in inner_schema.iteritems():
+        for key, value in iteritems(inner_schema):
             if isinstance(key, Required):
                 self.to_native_required_fields[key.dto_name] = key.native_name, value
                 self.to_dto_required_fields[key.native_name] = key.dto_name, value
@@ -452,7 +461,7 @@ class Dict(Converter):
         errors = []
         required_fields = self.to_native_required_fields if to_native else self.to_dto_required_fields
         optional_fields = self.to_native_optional_fields if to_native else self.to_dto_optional_fields
-        for key, (substitution_key, converter) in required_fields.iteritems():
+        for key, (substitution_key, converter) in iteritems(required_fields):
             try:
                 if key in data:
                     if to_native:
@@ -469,7 +478,7 @@ class Dict(Converter):
             except Invalid as e:
                 e.path = [key] + e.path
                 errors.append(e)
-        for data_key, data_value in data.iteritems():
+        for data_key, data_value in iteritems(data):
             try:
                 if data_key not in optional_fields:
                     errors.append(UnknownInvalid('encountered an unknown field', [data_key]))
