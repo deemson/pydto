@@ -43,7 +43,7 @@ schema = Schema({
 })
 
 # We convert an arbitrary dictionary, that conforms to the schema, to
-# Python's native objects
+# Python's native datatypes
 native_obj = schema.to_native({
     'aDate': '2008-12-3 13:05.15'
 })
@@ -55,7 +55,7 @@ assert native_obj['aDate']
 assert datetime(2008, 12, 3, 13, 5, 15) == native_obj['aDate']
 ```
 
-You need to create a schema object. Schema describes structure of your 
+You need to create a schema object. Schema describes the structure of your 
 DTO and types in it. Next you will call one of the two main methods of the
 Schema object:
 
