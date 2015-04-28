@@ -32,9 +32,23 @@ First, you need to create a schema object. Schema describes structure of your
 DTO and types in it. First example is simple:
 
 ```python
-from pydto import Schema, Required, String
+from datetime import datetime
+from pydto import Schema, Required, DateTime
 
+# We define a schema
 schema = Schema({
-    Required('aName'): String()
+    Required('aDate'): DateTime(datetime_format='%Y-%m-%d %H:%M.%S')
 })
+
+# We convert an arbitrary dictionary, that conforms to the schema, to
+# Python's native objects
+native_obj = schema.to_native({
+    'aDate': '2008-12-3 13:05.15'
+})
+
+# Check that everything is ok:
+
+assert isinstance(native_obj, dict)
+assert native_obj['aDate']
+assert datetime(2008, 12, 3, 13, 5, 15) == native_obj['aDate']
 ```
