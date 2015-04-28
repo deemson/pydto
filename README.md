@@ -52,8 +52,8 @@ assert native_obj['aDate']
 assert datetime(2008, 12, 3, 13, 5, 15) == native_obj['aDate']
 ```
 
-First, you need to create a schema object. Schema describes structure of your 
-DTO and types in it. Next, you will call one, of the two main methods of an
+You need to create a schema object. Schema describes structure of your 
+DTO and types in it. Next you will call one of the two main methods of the
 Schema object:
 
   - `schema.to_dto` method takes a dictionary or a list and converts it to
@@ -65,11 +65,75 @@ Schema object:
   but types like datetimes or decimals will be converted.
   
 Data you pass to these method must conform to defined schema, 
-otherwise an error will be raised:
+otherwise an error will be raised. Let's pass an empty dict to the schema
+defined above:
 
 ```python
 # raises pydto.MultipleInvalid
 # str(e) == "required field is missing @ data['aDate']"
 native_obj = schema.to_native({
 })
+```
+
+This code will raise a `pydto.MultipleInvalid` error. This is the only type of
+errors, that `to_native` and `to_dto` methods will throw (hopefully :D).
+The `pydto.MultipleInvalid` error is an aggregating exception: it will hold
+all the exceptions, encountered when converting the data:
+
+```python
+schema = Schema({
+    Required('aString'): String(),
+    Required('anInt'): Integer()
+})
+
+try:
+    schema.to_native({})
+except MultipleInvalid as mi:
+    # prints:
+    # required field is missing @ data['aString']
+    # required field is missing @ data['anInt']
+    for e in mi.errors:
+        print(str(e))
+```
+
+A slightly more complex example, demonstrating more PyDto features - optional
+fields, inner dictionaries and lists:
+
+```python
+schema = Schema({
+    Required('someString1', 'some_string_1'): String(),
+    Optional('someString2', 'some_string_2'): String(),
+    Required('someDict', 'some_dict'): {
+        Required('someInt', 'some_int'): Integer(),
+        Required('someList', 'some_list'): List(Decimal()),
+        Required('someOtherList', 'some_other_list'): List({
+            Required('innerString', 'inner_string'): String(),
+            Required('innerInt', 'inner_int'): Integer()
+        })
+    }
+})
+
+native_object = schema.to_native({
+    'someString1': 'asdf',
+    'someDict': {
+        'someInt': 2,
+        'someList': ['11.5', '12.2'],
+        'someOtherList': [
+            {'innerString': 'is1', 'innerInt': 1},
+            {'innerString': 'is2', 'innerInt': '2'}
+        ]
+    }
+})
+
+assert native_object == {
+    'some_string_1': 'asdf',
+    'some_dict': {
+        'some_int': 2,
+        'some_other_list': [
+            {'inner_int': 1, 'inner_string': 'is1'},
+            {'inner_int': 2, 'inner_string': 'is2'}
+        ],
+        'some_list': [decimal.Decimal('11.5'), decimal.Decimal('12.2')],
+    }
+}
 ```
