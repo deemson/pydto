@@ -23,10 +23,13 @@ succinct schema definitions and cool looking API. Like
 [Schematics](https://github.com/schematics/schematics), PyDto is able to
 perform two-way transformations: from DTOs to Python's native objects and vice
 versa. Unlike these two, PyDto can also rename fields, effectively converting 
-data from one naming convention to another (e.g. for JSON camelCase to Python's
-snake_case).
+data from one naming convention to another (e.g. from JSON camelCase
+to Python's snake_case).
 
-## Usage ##
+## Overview ##
+
+Let's look at features of PyDto using a series of small, self-explanatory
+examples. 
 
 First example is simple:
 
@@ -136,4 +139,19 @@ assert native_object == {
         'some_list': [decimal.Decimal('11.5'), decimal.Decimal('12.2')],
     }
 }
+```
+
+Another cool feature of PyDto - it's able to create mocks using your schema:
+
+```python
+mock_object = schema.mock()
+print(mock_object)
+```
+
+Mock objects are always made with native Python datatypes. Pass the newly
+created mock to schema's `to_dto` method to convert fields to primitives:
+
+```python
+primitive_mock_object = schema.to_dto(mock_object)
+print(primitive_mock_object)
 ```
