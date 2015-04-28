@@ -60,7 +60,7 @@ Schema object:
   DTO datatypes, which can be then serialized into JSON, YAML, etc. without
   any additional fuss.
   - `schema.to_native` works as exact opposite: it takes primitive 
-  datatypes, encountered in deserialized objects, and converts them to native
+  datatypes, encountered in deserialized objects and converts them to native
   Python objects. Simple datatypes like strings or integers leaved as they are,
   but types like datetimes or decimals will be converted.
   
@@ -97,7 +97,7 @@ except MultipleInvalid as mi:
 ```
 
 A slightly more complex example, demonstrating more PyDto features - optional
-fields, inner dictionaries and lists:
+fields, inner dictionaries, lists and field renaming:
 
 ```python
 schema = Schema({
