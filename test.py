@@ -70,4 +70,3 @@ def test_messages():
         assert_true(False, 'should have raised an exception')
     except MultipleInvalid as e:
         assert_equal(1, len(e.errors))
-

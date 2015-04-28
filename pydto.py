@@ -31,7 +31,8 @@ class Invalid(Error):
 
     """
 
-    def __init__(self, message, path=None, error_message=None, error_type=None):
+    def __init__(self, message, path=None, error_message=None,
+                 error_type=None):
         Error.__init__(self, message)
         self.path = path or []
         self.error_message = error_message or message
@@ -112,12 +113,14 @@ class Schema(object):
         elif isinstance(schema, Converter):
             return schema
         else:
-            raise SchemaError('%s is not a valid value in schema' % type(schema))
+            raise SchemaError(
+                '%s is not a valid value in schema' % type(schema))
 
     def _compile_dict(self, schema):
         for key, inner_schema in iteritems(schema):
             if not isinstance(key, Marker):
-                raise SchemaError('keys in schema should be instances of Marker class')
+                raise SchemaError(
+                    'keys in schema should be instances of Marker class')
             schema[key] = self._compile_schema(inner_schema)
         return Dict(schema)
 
@@ -198,7 +201,9 @@ class String(Converter):
         >>> mocked_string = String().mock()
         >>> assert isinstance(mocked_string, str)
         """
-        return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+        return ''.join(
+            random.choice(string.ascii_letters + string.digits) for _ in
+            range(10))
 
 
 class Integer(Converter):
@@ -260,8 +265,9 @@ class Boolean(Converter):
     >>> result['aBool']
     True
 
-    However if a value is passed to a strict Boolean (which it is by default) that not one of TRUTH_VALUES
-    or FALSE_VALUES, then a TypeInvalid exception is raised:
+    However if a value is passed to a strict Boolean (which it is by default)
+    that not one of TRUTH_VALUES or FALSE_VALUES,
+    then a TypeInvalid exception is raised:
 
     >>> try:
     ...     result = schema.to_native({'aBool': 'a'})
@@ -274,12 +280,12 @@ class Boolean(Converter):
     TRUTH_VALUES = ['true', 't', 'yes', 'y', '1']
     FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
 
-
     def __init__(self, strict=True):
         """
-        :param strict: when True, values supplied to this converter are expected to
-         be in either TRUE_VALUES or FALSE_VALUES. Setting this to False will force Boolean to conform to
-         default Python truth rules.
+        :param strict: when True, values supplied to this converter
+        are expected to be in either TRUE_VALUES or FALSE_VALUES.
+        Setting this to False will force Boolean to conform to
+        default Python truth rules.
         """
         self.strict = strict
 
@@ -303,7 +309,8 @@ class Boolean(Converter):
                     return False
                 else:
                     raise TypeInvalid(
-                        'a strict boolean should be either one of %r or one of %r'
+                        'a strict boolean should be '
+                        'either one of %r or one of %r'
                         % (self.TRUTH_VALUES, self.FALSE_VALUES)
                     )
             else:
@@ -330,7 +337,8 @@ class DateTime(Converter):
     >>> assert 'aDate' in result
     >>> assert result['aDate'] == '2000-02-13 15:34.40'
 
-    Will raise a SchemaError upon initialization if the datetime format string is incorrect:
+    Will raise a SchemaError upon initialization if the datetime
+    format string is incorrect:
 
     >>> try:
     ...     schema = Schema({Required('aDate'): DateTime('%#')})
@@ -338,7 +346,8 @@ class DateTime(Converter):
     ... except SchemaError:
     ...     pass
 
-    Will raise TypeInvalid when supplied with a bad datetime string or bad datetime object:
+    Will raise TypeInvalid when supplied with a bad datetime string or
+    bad datetime object:
 
     >>> schema = Schema({Required('aDate'): DateTime('%Y')})
     >>> try:
@@ -357,9 +366,11 @@ class DateTime(Converter):
 
     def __init__(self, datetime_format='%Y-%m-%d %H:%M.%S'):
         try:
-            datetime.strptime(datetime.utcnow().strftime(datetime_format), datetime_format)
+            datetime.strptime(datetime.utcnow().strftime(datetime_format),
+                              datetime_format)
         except (TypeError, ValueError) as e:
-            raise SchemaError('bad datetime format %r: %r' % (datetime_format, e))
+            raise SchemaError(
+                'bad datetime format %r: %r' % (datetime_format, e))
         self.datetime_format = datetime_format
 
     def to_native(self, data):
@@ -442,11 +453,15 @@ class Dict(Converter):
         self.to_dto_optional_fields = {}
         for key, value in iteritems(inner_schema):
             if isinstance(key, Required):
-                self.to_native_required_fields[key.dto_name] = key.native_name, value
-                self.to_dto_required_fields[key.native_name] = key.dto_name, value
+                self.to_native_required_fields[
+                    key.dto_name] = key.native_name, value
+                self.to_dto_required_fields[
+                    key.native_name] = key.dto_name, value
             elif isinstance(key, Optional):
-                self.to_native_optional_fields[key.dto_name] = key.native_name, value
-                self.to_dto_optional_fields[key.native_name] = key.dto_name, value
+                self.to_native_optional_fields[
+                    key.dto_name] = key.native_name, value
+                self.to_dto_optional_fields[
+                    key.native_name] = key.dto_name, value
 
     def to_dto(self, data):
         return self._convert_dict(data, False)
@@ -460,19 +475,26 @@ class Dict(Converter):
         data = dict(data)
         result = {}
         errors = []
-        required_fields = self.to_native_required_fields if to_native else self.to_dto_required_fields
-        optional_fields = self.to_native_optional_fields if to_native else self.to_dto_optional_fields
+        if to_native:
+            required_fields = self.to_native_required_fields
+            optional_fields = self.to_native_optional_fields
+        else:
+            required_fields = self.to_dto_required_fields
+            optional_fields = self.to_dto_optional_fields
         for key, (substitution_key, converter) in iteritems(required_fields):
             try:
                 if key in data:
                     if to_native:
-                        result[substitution_key] = converter.to_native(data.pop(key))
+                        result[substitution_key] = converter.to_native(
+                            data.pop(key))
                     else:
-                        result[substitution_key] = converter.to_dto(data.pop(key))
+                        result[substitution_key] = converter.to_dto(
+                            data.pop(key))
                 else:
-                    errors.append(RequiredInvalid('required field is missing', [key]))
+                    errors.append(
+                        RequiredInvalid('required field is missing', [key]))
             except MultipleInvalid as e:
-                errs = [e for e in e.errors]
+                errs = [ie for ie in e.errors]
                 for e in errs:
                     e.path = [key] + e.path
                 errors.extend(errs)
@@ -482,15 +504,18 @@ class Dict(Converter):
         for data_key, data_value in iteritems(data):
             try:
                 if data_key not in optional_fields:
-                    errors.append(UnknownInvalid('encountered an unknown field', [data_key]))
+                    errors.append(
+                        UnknownInvalid('encountered an unknown field',
+                                       [data_key]))
                 else:
                     substitution_key, converter = optional_fields[data_key]
                     if to_native:
-                        result[substitution_key] = converter.to_native(data_value)
+                        result[substitution_key] = converter.to_native(
+                            data_value)
                     else:
                         result[substitution_key] = converter.to_dto(data_value)
             except MultipleInvalid as e:
-                errs = [e for e in e.errors]
+                errs = [ie for ie in e.errors]
                 for e in errs:
                     e.path = [data_key] + e.path
                 errors.extend(errs)
@@ -503,7 +528,9 @@ class Dict(Converter):
 
     def mock(self):
         """
-        >>> mocked_dict = Schema({Required('a'): DateTime(), Optional('b'): String()}).mock()
+        >>> mocked_dict = Schema(
+        ...     {Required('a'): DateTime(), Optional('b'): String()}
+        ... ).mock()
         >>> assert isinstance(mocked_dict, dict)
         """
         result = {}
@@ -531,7 +558,7 @@ class List(Converter):
                 else:
                     result.append(self.inner_schema.to_dto(d))
             except MultipleInvalid as e:
-                errs = [e for e in e.errors]
+                errs = [ie for ie in e.errors]
                 for e in errs:
                     e.path = [idx] + e.path
                 errors.extend(errs)
@@ -550,9 +577,11 @@ class List(Converter):
 
     def mock(self):
         """
-        >>> mocked_list = Schema(List({Required('a'): DateTime(), Optional('b'): String()})).mock()
+        >>> mocked_list = Schema(List({
+        ...     Required('a'): DateTime(), Optional('b'): String()
+        ... })).mock()
         >>> assert isinstance(mocked_list, list)
         """
 
-        return [self.inner_schema.mock() for _ in range(random.randrange(3) + 1)]
-
+        return [self.inner_schema.mock() for _ in
+                range(random.randrange(3) + 1)]
