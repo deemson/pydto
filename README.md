@@ -13,9 +13,9 @@ on top of their feature set.
 
 Like both these libraries, PyDto has:
 
-  - Support for complex data structures.
-  - Validation for every field in data.
-  - Cool and informative error messages.
+  - support for complex data structures;
+  - validation for every field in data;
+  - informative error messages.
 
 
 Like [Voluptuos](https://github.com/alecthomas/voluptuous), PyDto has 
@@ -31,9 +31,10 @@ snake_case).
 First, you need to create a schema object. Schema describes structure of your 
 DTO and types in it. First example is simple:
 
-    ```Python
+    ```python
     from pydto import Schema, Required, String
     
     schema = Schema({
         Required('aName'): String()
     })
+    ```
