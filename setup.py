@@ -13,7 +13,7 @@ description = long_description.splitlines()[0].strip()
 setup(
     name='pydto',
     url='https://github.com/deemson/pydto',
-    download_url='https://github.com/deemson/pydto',
+    download_url='https://pypi.python.org/pypi/pydto',
     version=version,
     description='data validation and conversion library',
     long_description=long_description,
