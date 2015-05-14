@@ -6,8 +6,11 @@ import sys
 
 if sys.version_info >= (3,):
     iteritems = dict.items
+    strtype = str
 else:
     iteritems = dict.iteritems
+    # flake8: noqa
+    strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
 __version__ = '0.1'
@@ -97,6 +100,10 @@ class ListInvalid(Invalid):
     """The value found was not a list."""
 
 
+class ObjectInvalid(Invalid):
+    """The value found was not an obejct of required type."""
+
+
 class Schema(object):
     def __init__(self, schema):
         self.schema = self._compile_schema(schema)
@@ -104,10 +111,7 @@ class Schema(object):
     def _compile_schema(self, schema):
         if isinstance(schema, dict):
             return self._compile_dict(schema)
-        elif isinstance(schema, Dict):
-            schema.inner_schema = self._compile_schema(schema.inner_schema)
-            return schema
-        elif isinstance(schema, List):
+        elif isinstance(schema, (Dict, Object, List)):
             schema.inner_schema = self._compile_schema(schema.inner_schema)
             return schema
         elif isinstance(schema, Converter):
@@ -445,7 +449,8 @@ class Decimal(Converter):
 class Dict(Converter):
     def __init__(self, inner_schema):
         if not isinstance(inner_schema, dict):
-            raise SchemaError('expected a dictionary')
+            raise SchemaError('expected a dictionary, got %r instead'
+                              % inner_schema)
         self.inner_schema = inner_schema
         self.to_native_required_fields = {}
         self.to_native_optional_fields = {}
@@ -471,7 +476,8 @@ class Dict(Converter):
 
     def _convert_dict(self, data, to_native):
         if not isinstance(data, dict):
-            raise DictInvalid('expected a dictionary')
+            raise DictInvalid('expected a dictionary, got %r instead'
+                              % data)
         data = dict(data)
         result = {}
         errors = []
@@ -548,7 +554,7 @@ class List(Converter):
 
     def _convert_list(self, data, to_native):
         if not isinstance(data, list):
-            raise ListInvalid('expected a list')
+            raise ListInvalid('expected a list, got %r instead' % data)
         result = []
         errors = []
         for idx, d in enumerate(data):
@@ -585,3 +591,100 @@ class List(Converter):
 
         return [self.inner_schema.mock() for _ in
                 range(random.randrange(3) + 1)]
+
+
+class Object(Converter):
+    """
+
+    Marks a field in a schema as an object field:
+
+    >>> class User(object):
+    ...     def __init__(self, first_name, last_name, birth_date):
+    ...         self.first_name = first_name
+    ...         self.last_name = last_name
+    ...         self.birth_date = birth_date
+    >>> schema = Schema(Object(User, {
+    ...     Required('first_name'): String(),
+    ...     Required('last_name'): String(),
+    ...     Required('birth_date'): DateTime('%Y-%m-%d')
+    ... }))
+    >>> user = schema.to_native({
+    ...     'first_name': 'John',
+    ...     'last_name': 'Smith',
+    ...     'birth_date': '1977-08-5'
+    ... })
+    >>> assert user
+    >>> assert isinstance(user, User)
+    >>> assert 'John' == user.first_name
+    >>> assert 'Smith' == user.last_name
+    >>> assert user.birth_date.date() == datetime(1977, 8, 5).date()
+    """
+
+    def __init__(self, object_class, inner_schema,
+                 object_initializator='__init__'):
+        """
+        :param object_class: an object class
+        :param inner_schema: a dictionary with inner object schema
+        :param object_initializator: a class method, that should be used
+        to initialize object's params. All parsed schema params will be
+        passed as \*\*kwargs to this method.
+        If none supplied, object's constructor will be used.
+        """
+        if not isinstance(object_class, type):
+            raise SchemaError('expected a class')
+        if not isinstance(inner_schema, dict):
+            raise SchemaError('expected a dictionary')
+        if object_initializator is None or \
+                str(object_initializator) == '__init__':
+            self.object_constructor = None
+        elif isinstance(object_initializator, strtype):
+            self.object_constructor = getattr(object_class,
+                                              object_initializator)
+            if not self.object_constructor:
+                raise SchemaError('%s does not have a method named %s'
+                                  % (object_class, object_initializator))
+        elif callable(object_initializator):
+            if not getattr(object_class, object_initializator.__name__):
+                raise SchemaError('%s is not %s method'
+                                  % (object_class,
+                                     object_initializator.__name__))
+            self.object_constructor = object_initializator
+        else:
+            raise SchemaError('expected a %s method or method name'
+                              % object_class)
+
+        self.object_class = object_class
+        self.inner_schema = inner_schema
+
+    def to_dto(self, data):
+        if not isinstance(data, self.object_class):
+            raise ObjectInvalid('expected a %s instance, got %r instead'
+                                % (self.object_class, data))
+        dict_data = {n.native_name: getattr(data, n.native_name) for n in
+                     self.inner_schema.inner_schema.keys()}
+        return self.inner_schema.to_dto(dict_data)
+
+    def to_native(self, data):
+        dict_data = self.inner_schema.to_native(data)
+        if self.object_constructor is None:
+            return self.object_class(**dict_data)
+        else:
+            o = self.object_class()
+            self.object_constructor(o, **dict_data)
+            return o
+
+    def mock(self):
+        """
+        >>> class User(object):
+        ...     def __init__(self, first_name):
+        ...         self.first_name = first_name
+        >>> mocked_user = schema = Schema(Object(User, {
+        ...     Required('first_name'): String()
+        ... })).mock()
+        >>> assert isinstance(mocked_user, User)
+        """
+        kwargs = self.inner_schema.mock()
+        if self.object_constructor is None:
+            return self.object_class(**kwargs)
+        else:
+            return self.object_constructor(self.object_class(), **kwargs)
