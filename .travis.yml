@@ -6,3 +6,7 @@ python:
   - "3.3"
   - "3.4"
 script: nosetests -v --with-doctest
+before_install:
+  pip install codecov
+after_success:
+  codecov
