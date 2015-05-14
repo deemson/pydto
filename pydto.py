@@ -660,8 +660,8 @@ class Object(Converter):
         if not isinstance(data, self.object_class):
             raise ObjectInvalid('expected a %s instance, got %r instead'
                                 % (self.object_class, data))
-        dict_data = {n.native_name: getattr(data, n.native_name) for n in
-                     self.inner_schema.inner_schema.keys()}
+        dict_data = dict([(n.native_name, getattr(data, n.native_name))
+                          for n in self.inner_schema.inner_schema.keys()])
         return self.inner_schema.to_dto(dict_data)
 
     def to_native(self, data):
