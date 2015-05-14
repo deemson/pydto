@@ -152,16 +152,19 @@ class User(object):
     self.first_name = first_name
     self.last_name = last_name
     self.birth_date = birth_date
+    
 schema = Schema(Object(User, {
     Required('first_name'): String(),
     Required('last_name'): String(),
     Required('birth_date'): DateTime('%Y-%m-%d')
 }))
+
 user = schema.to_native({
     'first_name': 'John',
     'last_name': 'Smith',
     'birth_date': '1977-08-5'
 })
+
 assert user
 assert isinstance(user, User)
 assert 'John' == user.first_name
