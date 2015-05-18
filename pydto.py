@@ -688,3 +688,37 @@ class Object(Converter):
             return self.object_class(**kwargs)
         else:
             return self.object_constructor(self.object_class(), **kwargs)
+
+
+class UnvalidatedDict(Converter):
+    """
+
+    Marks a field in a schema as an unvalidated dictionary: a value should be
+    a dictionary, but inner schema will not be validated or converted.
+
+    >>> schema = Schema({Required('dict'): UnvalidatedDict()})
+    >>> res = schema.to_native({'dict': {'aField': 'hello'}})
+    >>> assert res
+    >>> assert 'dict' in res
+    >>> assert {'aField': 'hello'} == res['dict']
+    >>> try:
+    ...     schema.to_native(object())
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    """
+
+    def to_dto(self, data):
+        if not isinstance(data, dict):
+            raise DictInvalid('expected a dictionary, got %r instead'
+                              % data)
+        return data
+
+    def to_native(self, data):
+        if not isinstance(data, dict):
+            raise DictInvalid('expected a dictionary, got %r instead'
+                              % data)
+        return data
+
+    def mock(self):
+        return {}
