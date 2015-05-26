@@ -13,7 +13,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.2'
+__version__ = '0.2.2'
 
 
 class Error(Exception):
@@ -722,3 +722,35 @@ class UnvalidatedDict(Converter):
 
     def mock(self):
         return {}
+
+
+class UnvalidatedList(Converter):
+    """
+
+    Marks a field in a schema as an unvalidated list: a value should be
+    a list, but inner schema will not be validated or converted.
+
+    >>> schema = Schema({Required('list'): UnvalidatedList()})
+    >>> res = schema.to_native({'list': ['hello', 2]})
+    >>> assert res
+    >>> assert 'list' in res
+    >>> assert ['hello', 2] == res['list']
+    >>> try:
+    ...     schema.to_native(object())
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    """
+
+    def to_dto(self, data):
+        if not isinstance(data, list):
+            raise ListInvalid('expected a list, got %r instead' % data)
+        return data
+
+    def to_native(self, data):
+        if not isinstance(data, list):
+            raise ListInvalid('expected a list, got %r instead' % data)
+        return data
+
+    def mock(self):
+        return []
