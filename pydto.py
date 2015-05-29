@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 import decimal
 import random
@@ -13,7 +14,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.2.2'
+__version__ = '0.3.0'
 
 
 class Error(Exception):
@@ -84,6 +85,10 @@ class RequiredInvalid(Invalid):
     """Required field was missing."""
 
 
+class InclusiveInvalid(Invalid):
+    """Inclusive field was missing, while other inclusives were present."""
+
+
 class UnknownInvalid(Invalid):
     """The key was not found in the schema."""
 
@@ -123,8 +128,8 @@ class Schema(object):
     def _compile_dict(self, schema):
         for key, inner_schema in iteritems(schema):
             if not isinstance(key, Marker):
-                raise SchemaError(
-                    'keys in schema should be instances of Marker class')
+                raise SchemaError('keys in schema should'
+                                  ' be instances of Marker class')
             schema[key] = self._compile_schema(inner_schema)
         return Dict(schema)
 
@@ -170,6 +175,45 @@ class Required(Marker):
 
 class Optional(Marker):
     pass
+
+
+class Inclusive(Marker):
+    """
+    Marks a field in a schema as inclusive. At least two inclusive fields
+    should be present:
+
+    >>> try:
+    ...     schema = Schema({
+    ...         Inclusive('one'): String()
+    ...     })
+    ...     assert False, "an error should've been raised"
+    ... except SchemaError:
+    ...     pass
+
+    When two or more fields are inclusive, it means that either all of them
+    are present or all of them are missing:
+
+    >>> schema = Schema({
+    ...     Inclusive('one'): String(),
+    ...     Inclusive('two'): String()
+    ... })
+    >>> res = schema.to_native({'one': '1', 'two': '2'})
+    >>> assert res == {'one': '1', 'two': '2'}
+    >>> assert {} == schema.to_native({})
+    >>> try:
+    ...     schema.to_native({'one': '1'})
+    ...     assert False, "an error should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    """
+
+    def __init__(self, dto_name=None, native_name=None, monitor=None):
+        self.monitor = monitor
+        super(Inclusive, self).__init__(dto_name, native_name)
+
+    def monitor(self, monitor):
+        self.monitor = monitor
+        return self
 
 
 class Converter(object):
@@ -447,26 +491,55 @@ class Decimal(Converter):
 
 
 class Dict(Converter):
+    """
+    Marks a field in a schema as a dictionary field, containing objects, that
+    conform to inner schema:
+
+    >>> schema = Schema({
+    ...     Required('aDecimal'): Decimal(),
+    ...     Optional('someString'): String(),
+    ...     Required('innerDict'): {
+    ...         Required('anInt'): Integer()
+    ...     }
+    ... })
+    >>> res = schema.to_native({'aDecimal': '12.3',
+    ...                         'innerDict': {'anInt': 5}})
+    >>> assert res == {'aDecimal': decimal.Decimal('12.3'),
+    ...                'innerDict': {'anInt': 5}}
+
+    It is possible to use just a Python's dictionary literal,
+    instead of using this object. So this:
+
+    >>> schema = Schema(Dict({
+    ...     Required('aString'): String()
+    ... }))
+
+    is effectively the same as:
+
+    >>> schema = Schema({
+    ...     Required('aString'): String()
+    ... })
+
+    """
+
     def __init__(self, inner_schema):
         if not isinstance(inner_schema, dict):
             raise SchemaError('expected a dictionary, got %r instead'
                               % inner_schema)
         self.inner_schema = inner_schema
-        self.to_native_required_fields = {}
-        self.to_native_optional_fields = {}
-        self.to_dto_required_fields = {}
-        self.to_dto_optional_fields = {}
-        for key, value in iteritems(inner_schema):
-            if isinstance(key, Required):
-                self.to_native_required_fields[
-                    key.dto_name] = key.native_name, value
-                self.to_dto_required_fields[
-                    key.native_name] = key.dto_name, value
-            elif isinstance(key, Optional):
-                self.to_native_optional_fields[
-                    key.dto_name] = key.native_name, value
-                self.to_dto_optional_fields[
-                    key.native_name] = key.dto_name, value
+        self.inclusive_by_dto_name = defaultdict(set)
+        self.inclusive_by_native_name = defaultdict(set)
+        for marker, converter in iteritems(inner_schema):
+            if isinstance(marker, Inclusive):
+                self.inclusive_by_dto_name[marker.monitor] \
+                    .add(marker.dto_name)
+                self.inclusive_by_native_name[marker.monitor] \
+                    .add(marker.native_name)
+        for monitor, names in iteritems(self.inclusive_by_native_name):
+            if len(names) == 1:
+                m_name = 'default' if monitor is None else repr(monitor)
+                raise SchemaError('only one inclusive field under %s '
+                                  'monitor' % m_name)
 
     def to_dto(self, data):
         return self._convert_dict(data, False)
@@ -474,60 +547,57 @@ class Dict(Converter):
     def to_native(self, data):
         return self._convert_dict(data, True)
 
+    def _process_value(self, converter, value, name, errors):
+        try:
+            return converter(value)
+        except MultipleInvalid as e:
+            errs = [ie for ie in e.errors]
+            for e in errs:
+                e.path = [name] + e.path
+            errors.extend(errs)
+        except Invalid as e:
+            e.path = [name] + e.path
+            errors.append(e)
+
     def _convert_dict(self, data, to_native):
         if not isinstance(data, dict):
             raise DictInvalid('expected a dictionary, got %r instead'
                               % data)
+        # Make a copy of incoming dictionary to pop items
+        # without changing incoming data
         data = dict(data)
         result = {}
+        inclusive = defaultdict(set)
         errors = []
-        if to_native:
-            required_fields = self.to_native_required_fields
-            optional_fields = self.to_native_optional_fields
-        else:
-            required_fields = self.to_dto_required_fields
-            optional_fields = self.to_dto_optional_fields
-        for key, (substitution_key, converter) in iteritems(required_fields):
-            try:
-                if key in data:
-                    if to_native:
-                        result[substitution_key] = converter.to_native(
-                            data.pop(key))
-                    else:
-                        result[substitution_key] = converter.to_dto(
-                            data.pop(key))
-                else:
+        for marker, converter in iteritems(self.inner_schema):
+            if to_native:
+                key, substitution_key = marker.dto_name, marker.native_name
+                method = getattr(converter, 'to_native')
+            else:
+                key, substitution_key = marker.native_name, marker.dto_name
+                method = getattr(converter, 'to_dto')
+            if key in data:
+                value = self._process_value(method, data.pop(key), key, errors)
+                if isinstance(marker, Inclusive):
+                    inclusive[marker.monitor].add(substitution_key)
+                result[substitution_key] = value
+            else:
+                if isinstance(marker, Required):
+                    errors.append(RequiredInvalid('required field is missing',
+                                                  [key]))
+        if inclusive:
+            if to_native:
+                reference_inclusive = self.inclusive_by_dto_name
+            else:
+                reference_inclusive = self.inclusive_by_native_name
+            for monitor, inclusive_group in iteritems(inclusive):
+                diff = reference_inclusive[monitor] - inclusive_group
+                if diff:
                     errors.append(
-                        RequiredInvalid('required field is missing', [key]))
-            except MultipleInvalid as e:
-                errs = [ie for ie in e.errors]
-                for e in errs:
-                    e.path = [key] + e.path
-                errors.extend(errs)
-            except Invalid as e:
-                e.path = [key] + e.path
-                errors.append(e)
-        for data_key, data_value in iteritems(data):
-            try:
-                if data_key not in optional_fields:
-                    errors.append(
-                        UnknownInvalid('encountered an unknown field',
-                                       [data_key]))
-                else:
-                    substitution_key, converter = optional_fields[data_key]
-                    if to_native:
-                        result[substitution_key] = converter.to_native(
-                            data_value)
-                    else:
-                        result[substitution_key] = converter.to_dto(data_value)
-            except MultipleInvalid as e:
-                errs = [ie for ie in e.errors]
-                for e in errs:
-                    e.path = [data_key] + e.path
-                errors.extend(errs)
-            except Invalid as e:
-                e.path = [data_key] + e.path
-                errors.append(e)
+                        InclusiveInvalid('When %r fields are present, these'
+                                         ' fields should be present too:'
+                                         % list(inclusive_group),
+                                         [list(diff)]))
         if errors:
             raise MultipleInvalid(errors)
         return result
@@ -540,29 +610,39 @@ class Dict(Converter):
         >>> assert isinstance(mocked_dict, dict)
         """
         result = {}
-        for k, converter in self.to_native_required_fields.values():
-            result[k] = converter.mock()
-        for k, converter in self.to_native_optional_fields.values():
-            if random.choice((True, False)):
-                result[k] = converter.mock()
+        for marker, converter in iteritems(self.inner_schema):
+            if isinstance(marker, Required):
+                result[marker.native_name] = converter.mock()
+            elif isinstance(marker, Optional):
+                if random.choice((True, False)):
+                    result[marker.native_name] = converter.mock()
+            elif isinstance(marker, Inclusive):
+                pass
         return result
 
 
 class List(Converter):
+    """
+    Marks a field in a schema as a list field, containing objects, that
+    conform to inner schema:
+
+    >>> schema = Schema(List(Decimal()))
+    >>> res = schema.to_native([1, '2.5', 3])
+    >>> assert res == [decimal.Decimal(1), decimal.Decimal('2.5'),
+    ...                decimal.Decimal(3)]
+    """
+
     def __init__(self, inner_schema):
         self.inner_schema = inner_schema
 
-    def _convert_list(self, data, to_native):
+    def _convert_list(self, data, convertor):
         if not isinstance(data, list):
             raise ListInvalid('expected a list, got %r instead' % data)
         result = []
         errors = []
         for idx, d in enumerate(data):
             try:
-                if to_native:
-                    result.append(self.inner_schema.to_native(d))
-                else:
-                    result.append(self.inner_schema.to_dto(d))
+                result.append(convertor(d))
             except MultipleInvalid as e:
                 errs = [ie for ie in e.errors]
                 for e in errs:
@@ -576,10 +656,10 @@ class List(Converter):
         return result
 
     def to_dto(self, data):
-        return self._convert_list(data, False)
+        return self._convert_list(data, self.inner_schema.to_dto)
 
     def to_native(self, data):
-        return self._convert_list(data, True)
+        return self._convert_list(data, self.inner_schema.to_native)
 
     def mock(self):
         """
