@@ -14,7 +14,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 
 
 class Error(Exception):
@@ -520,6 +520,17 @@ class Dict(Converter):
     ...     Required('aString'): String()
     ... })
 
+    Unknown fields will raise errors:
+
+    >>> schema = Schema({
+    ...     Optional('aString'): String()
+    ... })
+    >>> try:
+    ...     schema.to_native({'anUnknownString': 'hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
     """
 
     def __init__(self, inner_schema):
@@ -598,6 +609,10 @@ class Dict(Converter):
                                          ' fields should be present too:'
                                          % list(inclusive_group),
                                          [list(diff)]))
+        if data:
+            for unknown_field in data.keys():
+                errors.append(UnknownInvalid('unknown field',
+                                             [unknown_field]))
         if errors:
             raise MultipleInvalid(errors)
         return result

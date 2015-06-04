@@ -1,3 +1,13 @@
+v0.3.1
+======
+
+- fixed issue with unknown fields errors are not being raised
+
+v0.3.0
+======
+
+- added Object for object conversion
+
 v0.2.2:
 =======
 
