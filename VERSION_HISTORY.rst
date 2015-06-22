@@ -1,3 +1,8 @@
+v0.3.3
+======
+
+- added FixedList converter
+
 v0.3.2
 ======
 

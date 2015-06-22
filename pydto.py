@@ -15,7 +15,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.3.2'
+__version__ = '0.3.3'
 
 
 class Error(Exception):
@@ -118,29 +118,13 @@ class FieldPopulateInvalid(Invalid):
     """Tried to populate an object's field, that already exists."""
 
 
+class FixedListLengthInvalid(Invalid):
+    """Data length is not equal to fixed list length."""
+
+
 class Schema(object):
     def __init__(self, schema):
-        self.schema = self._compile_schema(schema)
-
-    def _compile_schema(self, schema):
-        if isinstance(schema, dict):
-            return self._compile_dict(schema)
-        elif isinstance(schema, (Dict, Object, List)):
-            schema.inner_schema = self._compile_schema(schema.inner_schema)
-            return schema
-        elif isinstance(schema, Converter):
-            return schema
-        else:
-            raise SchemaError(
-                '%s is not a valid value in schema' % type(schema))
-
-    def _compile_dict(self, schema):
-        for key, inner_schema in iteritems(schema):
-            if not isinstance(key, Marker):
-                raise SchemaError('keys in schema should'
-                                  ' be instances of Marker class')
-            schema[key] = self._compile_schema(inner_schema)
-        return Dict(schema)
+        self.schema = Converter._compile_value(schema)
 
     @classmethod
     @contextmanager
@@ -295,6 +279,21 @@ class Converter(object):
 
     def mock(self):
         raise NotImplementedError()
+
+    def _compile(self):
+        return self
+
+    @classmethod
+    def _compile_value(cls, value):
+        if isinstance(value, dict):
+            return Dict(value)._compile()
+        if isinstance(value, (list, tuple)):
+            return FixedList(value)._compile()
+        elif isinstance(value, Converter):
+            return value._compile()
+        else:
+            raise SchemaError('%s is not a valid value in schema'
+                              % type(value))
 
 
 class String(Converter):
@@ -620,17 +619,24 @@ class Dict(Converter):
         self.inner_schema = inner_schema
         self.inclusive_by_dto_name = defaultdict(set)
         self.inclusive_by_native_name = defaultdict(set)
-        for marker, converter in iteritems(inner_schema):
-            if isinstance(marker, Inclusive):
-                self.inclusive_by_dto_name[marker.monitor] \
-                    .add(marker.dto_name)
-                self.inclusive_by_native_name[marker.monitor] \
-                    .add(marker.native_name)
+
+    def _compile(self):
+        for key, inner_schema in iteritems(self.inner_schema):
+            if not isinstance(key, Marker):
+                raise SchemaError('keys in schema should'
+                                  ' be instances of Marker class')
+            self.inner_schema[key] = self._compile_value(inner_schema)
+            if isinstance(key, Inclusive):
+                self.inclusive_by_dto_name[key.monitor] \
+                    .add(key.dto_name)
+                self.inclusive_by_native_name[key.monitor] \
+                    .add(key.native_name)
         for monitor, names in iteritems(self.inclusive_by_native_name):
             if len(names) == 1:
                 m_name = 'default' if monitor is None else repr(monitor)
                 raise SchemaError('only one inclusive field under %s '
                                   'monitor' % m_name)
+        return self
 
     def to_dto(self, data):
         return self._convert_dict(data, False)
@@ -730,6 +736,10 @@ class List(Converter):
     def __init__(self, inner_schema):
         self.inner_schema = inner_schema
 
+    def _compile(self):
+        self.inner_schema = Converter._compile_value(self.inner_schema)
+        return self
+
     def _convert_list(self, data, convertor):
         if not isinstance(data, list):
             raise ListInvalid('expected a list, got %r instead' % data)
@@ -766,6 +776,59 @@ class List(Converter):
 
         return [self.inner_schema.mock() for _ in
                 range(random.randrange(3) + 1)]
+
+
+class FixedList(Converter):
+    """
+    Marks a field in a schema as a list of fixed length. Every element in the
+    list has it's own type. You can use Python's list or tuple data types for
+    FixedList specification:
+
+    >>> schema = Schema([String(), Decimal(), Integer()])
+    >>> res = schema.to_native(['asd', '43.7', '8'])
+    >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
+
+    >>> schema = Schema((DateTime('%Y-%m-%d %H:%M.%S'), Decimal()))
+    >>> res = schema.to_native(['1985-12-1 15:36.21', '12.2'])
+    >>> assert datetime(1985, 12, 1, 15, 36, 21) == res[0]
+    >>> assert decimal.Decimal('12.2') == res[1]
+    """
+
+    def __init__(self, inner_schemas):
+        if not isinstance(inner_schemas, (list, tuple)):
+            raise SchemaError('expected a list or a tuple, got %r '
+                              'instead' % inner_schemas)
+        self.inner_schemas = inner_schemas
+
+    def _compile(self):
+        self.inner_schemas = tuple(Converter._compile_value(sch)
+                                   for sch in self.inner_schemas)
+        return self
+
+    def _check(self, data):
+        if not isinstance(data, list):
+            raise ListInvalid('expected a list, got %r instead' % data)
+        if len(data) != len(self.inner_schemas):
+            raise FixedListLengthInvalid('%r length is not equal to %d'
+                                         % (data, len(self.inner_schemas)))
+
+    def to_native(self, data):
+        self._check(data)
+        return [c.to_native(v) for c, v in zip(self.inner_schemas, data)]
+
+    def to_dto(self, data):
+        self._check(data)
+        return [c.to_dto(v) for c, v in zip(self.inner_schemas, data)]
+
+    def mock(self):
+        """
+        >>> mocked_fixed_list = Schema([DateTime(), Decimal()]).mock()
+        >>> assert isinstance(mocked_fixed_list, list)
+        >>> assert 2 == len(mocked_fixed_list)
+        >>> assert isinstance(mocked_fixed_list[0], datetime)
+        >>> assert isinstance(mocked_fixed_list[1], decimal.Decimal)
+        """
+        return [c.mock() for c in self.inner_schemas]
 
 
 class Object(Converter):
@@ -830,6 +893,10 @@ class Object(Converter):
 
         self.object_class = object_class
         self.inner_schema = inner_schema
+
+    def _compile(self):
+        self.inner_schema = Converter._compile_value(self.inner_schema)
+        return self
 
     def to_dto(self, data):
         if not isinstance(data, self.object_class):
