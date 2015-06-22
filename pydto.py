@@ -179,7 +179,7 @@ class Schema(object):
 
         >>> schema = Schema({Required('a_dec'): Decimal()})
         >>> d = {'z': 'zzz'}
-        >>> schema.populate_dto_dict(d, {'a_dec': decimal.Decimal(10.5)})
+        >>> schema.populate_dto_dict(d, {'a_dec': decimal.Decimal('10.5')})
         >>> assert '10.5' == d['a_dec']
         >>> assert 'zzz' == d['z']
         """
