@@ -75,7 +75,7 @@ def test_messages():
     except MultipleInvalid as e:
         assert_equal(1, len(e.errors))
     try:
-        schema.to_native([{'aDict':{}}])
+        schema.to_native([{'aDict': {}}])
         assert_true(False, 'should have raised an exception')
     except MultipleInvalid as e:
         assert_equal(2, len(e.errors))

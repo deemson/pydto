@@ -1,4 +1,5 @@
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 import decimal
 import random
@@ -14,7 +15,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 
 class Error(Exception):
@@ -109,6 +110,14 @@ class ObjectInvalid(Invalid):
     """The value found was not an obejct of required type."""
 
 
+class KeyPopulateInvalid(Invalid):
+    """Tried to populate a dictionary's key, that already exists."""
+
+
+class FieldPopulateInvalid(Invalid):
+    """Tried to populate an object's field, that already exists."""
+
+
 class Schema(object):
     def __init__(self, schema):
         self.schema = self._compile_schema(schema)
@@ -133,21 +142,82 @@ class Schema(object):
             schema[key] = self._compile_schema(inner_schema)
         return Dict(schema)
 
-    def to_dto(self, data):
+    @classmethod
+    @contextmanager
+    def _invalids_in_control(cls):
         try:
-            return self.schema.to_dto(data)
+            yield
         except MultipleInvalid:
             raise
         except Invalid as e:
             raise MultipleInvalid([e])
 
+    def _populate(self, dict_to_populate, data, retrieval_func):
+        if not isinstance(dict_to_populate, dict):
+            raise DictInvalid('object to populate should a dictionary')
+        with self._invalids_in_control():
+            result = retrieval_func(data)
+            for k, v in iteritems(result):
+                if k in dict_to_populate:
+                    raise KeyPopulateInvalid('key is already present'
+                                             ' in the dictionary', [k])
+                result[k] = v
+            dict_to_populate.update(result)
+
+    def to_dto(self, data):
+        with self._invalids_in_control():
+            return self.schema.to_dto(data)
+
     def to_native(self, data):
-        try:
+        with self._invalids_in_control():
             return self.schema.to_native(data)
-        except MultipleInvalid:
-            raise
-        except Invalid as e:
-            raise MultipleInvalid([e])
+
+    def populate_dto_dict(self, dto_dict, data):
+        """
+        Populates an arbitrary dictionary with fields from data, validated and
+        converted to DTO by current schema:
+
+        >>> schema = Schema({Required('a_dec'): Decimal()})
+        >>> d = {'z': 'zzz'}
+        >>> schema.populate_dto_dict(d, {'a_dec': decimal.Decimal(10.5)})
+        >>> assert '10.5' == d['a_dec']
+        >>> assert 'zzz' == d['z']
+        """
+        self._populate(dto_dict, data, self.schema.to_dto)
+
+    def populate_native_dict(self, native_dict, data):
+        """
+        Populates an arbitrary dictionary with fields from data, validated and
+        converted to native by current schema:
+
+        >>> schema = Schema({Required('a_dec'): Decimal()})
+        >>> d = {'z': 'zzz'}
+        >>> schema.populate_native_dict(d, {'a_dec': '10.5'})
+        >>> assert decimal.Decimal('10.5') == d['a_dec']
+        >>> assert 'zzz' == d['z']
+        """
+        self._populate(native_dict, data, self.schema.to_native)
+
+    def populate_native_object(self, obj, data):
+        """
+        Populates an arbitrary object with fields from data, validated and
+        converted to native by current schema:
+
+        >>> schema = Schema({Required('a_string'): String()})
+        >>> class Some(object):
+        ...     pass
+        >>> s = Some()
+        >>> schema.populate_native_object(s, {'a_string': 'hello'})
+        >>> assert 'hello' == s.a_string
+        """
+        with self._invalids_in_control():
+            result = self.schema.to_native(data)
+            for k, v in iteritems(result):
+                if hasattr(obj, k):
+                    raise FieldPopulateInvalid('object %r already has a field'
+                                               % obj, [k])
+            for k, v in iteritems(result):
+                setattr(obj, k, v)
 
     def mock(self):
         return self.schema.mock()
@@ -236,13 +306,23 @@ class String(Converter):
     >>> result = schema.to_native({'aString': 'just a simple string'})
     >>> assert 'aString' in result
     >>> assert result['aString'] == 'just a simple string'
+
+    >>> schema = Schema({Required('aString'): String()})
+    >>> try:
+    ...     schema.to_native({})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid as e:
+    ...     pass
     """
 
     def to_native(self, data):
         return self.to_dto(data)
 
     def to_dto(self, data):
-        return str(data)
+        result = str(data)
+        if not result:
+            return None
+        return result
 
     def mock(self):
         """
@@ -273,7 +353,7 @@ class Integer(Converter):
 
     >>> try:
     ...     result = schema.to_native({'anInt': 'a'})
-    ...     assert False, 'an exception should be raised'
+    ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid as e:
     ...     assert isinstance(e.errors[0], TypeInvalid)
     ...     assert e.errors[0].path == ['anInt'], '%r' % e.errors[0].path
@@ -319,7 +399,7 @@ class Boolean(Converter):
 
     >>> try:
     ...     result = schema.to_native({'aBool': 'a'})
-    ...     assert False, 'an exception should be raised'
+    ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid as e:
     ...     assert isinstance(e.errors[0], TypeInvalid)
     ...     assert e.errors[0].path == ['aBool'], '%r' % e.errors[0].path

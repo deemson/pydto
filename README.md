@@ -189,3 +189,51 @@ created mock to schema's `to_dto` method to convert fields to primitives:
 primitive_mock_object = schema.to_dto(mock_object)
 print(primitive_mock_object)
 ```
+
+## Partially applying schema to dictionaries and objects ##
+
+What if you need to validate only a portion of dictionary's keys? Or maybe you
+do not control your object's creation, but you still need to validate some of
+it's fields? Easy! Just use schema's populate_* methods! There are 3 of them:
+
+  - `schema.populate_dto_dict(dto_dict, data)` -- populates DTO dict with 
+  key-value pairs from data dictionary, validating and converting it to dto (via
+  calling schema.to_dto method internally);
+  - `schema.populate_native_dict(native_dict, data)` -- populates native dict with 
+  key-value pairs from data dictionary, validating and converting it to native (via
+  calling schema.to_native method internally);
+  - `schema.populate_native_object(obj, data)` -- populates arbitrary Python object's fields with 
+  key-value pairs from data dictionary, validating and converting it to native (via
+  calling schema.to_native method internally).
+  
+Any of these methods will raise an exception if a key/field is present in dict/object.
+ 
+Here is an example for each of the methods:
+
+```python
+schema = Schema({Required('a_dec'): Decimal()})
+d = {'z': 'zzz'}
+schema.populate_dto_dict(d, {'a_dec': decimal.Decimal(10.5)})
+assert '10.5' == d['a_dec']
+assert 'zzz' == d['z']
+```
+
+```python
+schema = Schema({Required('a_dec'): Decimal()})
+d = {'z': 'zzz'}
+schema.populate_native_dict(d, {'a_dec': '10.5'})
+assert decimal.Decimal('10.5') == d['a_dec']
+assert 'zzz' == d['z']
+```
+
+```python
+schema = Schema({Required('a_string'): String()})
+# Some arbitrary object
+class Some(object):
+    pass
+# Assume you cannot control it's creation or simply do not want to 
+# use it in you Schema definition (via Object converter)
+s = Some()
+schema.populate_native_object(s, {'a_string': 'hello'})
+assert 'hello' == s.a_string
+```

@@ -1,3 +1,8 @@
+v0.3.2
+======
+
+- added several populate_* methods to schema object
+
 v0.3.1
 ======
 
