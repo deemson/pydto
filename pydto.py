@@ -15,7 +15,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.3.3'
+__version__ = '0.3.4'
 
 
 class Error(Exception):
@@ -98,6 +98,10 @@ class TypeInvalid(Invalid):
     """The value found was not of required type."""
 
 
+class LiteralInvalid(Invalid):
+    """Data, passed to literal converter is not equal to the set value."""
+
+
 class DictInvalid(Invalid):
     """The value found was not a dict."""
 
@@ -120,6 +124,10 @@ class FieldPopulateInvalid(Invalid):
 
 class FixedListLengthInvalid(Invalid):
     """Data length is not equal to fixed list length."""
+
+
+class EnumInvalid(Invalid):
+    """Enum does not contain value provided."""
 
 
 class Schema(object):
@@ -280,12 +288,25 @@ class Converter(object):
     def mock(self):
         raise NotImplementedError()
 
+    def literal(self, value):
+        return Literal(self, value)
+
     def _compile(self):
         return self
 
     @classmethod
     def _compile_value(cls, value):
-        if isinstance(value, dict):
+        if isinstance(value, strtype):
+            return Literal(String(), value)
+        elif isinstance(value, int):
+            return Literal(Integer(), value)
+        elif isinstance(value, bool):
+            return Literal(Boolean(), value)
+        elif isinstance(value, decimal.Decimal):
+            return Literal(Decimal(), value)
+        elif isinstance(value, set):
+            return Enum(value)._compile()
+        elif isinstance(value, dict):
             return Dict(value)._compile()
         if isinstance(value, (list, tuple)):
             return FixedList(value)._compile()
@@ -294,6 +315,67 @@ class Converter(object):
         else:
             raise SchemaError('%s is not a valid value in schema'
                               % type(value))
+
+
+class Literal(Converter):
+    """
+    Wraps a converter (like String() or Integer()) to be a literal to some
+    value:
+
+    >>> schema = Schema({Required('aString'): Literal(String(), 'hello')})
+    >>> assert {'aString': 'hello'} == schema.to_native({'aString': 'hello'})
+    >>> try:
+    ...     schema.to_native({'aString': 'not hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    It's more concise to use Converter.literal method, though:
+
+    >>> schema = Schema({Required('aString'): String().literal('hello')})
+    >>> assert {'aString': 'hello'} == schema.to_native({'aString': 'hello'})
+    >>> try:
+    ...     schema.to_native({'aString': 'not hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    An yet more concise to use simple type literals for simple types
+    (string, integer, decimal and boolean):
+
+    >>> schema = Schema({Required('anInt'): 3})
+    >>> assert {'anInt': 3} == schema.to_native({'anInt': '3'})
+    >>> try:
+    ...     schema.to_native({'anInt': '2'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+
+    def __init__(self, converter, value):
+        self.converter = converter
+        self.value = value
+
+    def to_dto(self, data):
+        if data != self.value:
+            raise LiteralInvalid('value %r is not equal to %r'
+                                 % (data, self.value))
+        return self.converter.to_dto(data)
+
+    def to_native(self, data):
+        converted_data = self.converter.to_native(data)
+        if converted_data != self.value:
+            raise LiteralInvalid('value %r is not equal to %r'
+                                 % (converted_data, self.value))
+        return converted_data
+
+    def _compile(self):
+        self.converter._compile()
+        return self
+
+    def mock(self):
+        return self.value
 
 
 class String(Converter):
@@ -829,6 +911,52 @@ class FixedList(Converter):
         >>> assert isinstance(mocked_fixed_list[1], decimal.Decimal)
         """
         return [c.mock() for c in self.inner_schemas]
+
+
+class Enum(Converter):
+    """
+    Marks a field in a schema as a list of fixed length. Every element in the
+    list has it's own type. You can use Python's list or tuple data types for
+    FixedList specification:
+
+    >>> schema = Schema(set(('June', 6, 'VI')))
+    >>> assert 6 == schema.to_native('6')
+    >>> assert 'VI' == schema.to_native('VI')
+    >>> try:
+    ...     schema.to_native('V')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    """
+
+    def __init__(self, values):
+        self.values = values
+
+    def _compile(self):
+        self.values = set([Converter._compile_value(v) for v in self.values])
+        for v in self.values:
+            if not isinstance(v, Literal):
+                raise SchemaError('only literal values supported in enum')
+        return self
+
+    def to_native(self, data):
+        for v in self.values:
+            try:
+                return v.to_native(data)
+            except:
+                pass
+        raise EnumInvalid('none of enum values matches %r' % data)
+
+    def to_dto(self, data):
+        for v in self.values:
+            try:
+                return v.to_dto(data)
+            except:
+                pass
+        raise EnumInvalid('none of enum values matches %r' % data)
+
+    def mock(self):
+        return random.choice(list(self.values)).mock()
 
 
 class Object(Converter):

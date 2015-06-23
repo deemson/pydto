@@ -1,3 +1,8 @@
+v0.3.4
+======
+
+- added Enums and literal values
+
 v0.3.3
 ======
 

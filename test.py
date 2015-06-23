@@ -3,7 +3,7 @@ import decimal
 from nose.tools import assert_equal, assert_raises, assert_true
 from pydto import MultipleInvalid
 from pydto import Schema, Required, Optional, String, List, Decimal, Integer, \
-    Object, DateTime
+    Object, DateTime, Enum
 
 
 # test that mocks are generating correctly
@@ -17,10 +17,11 @@ def test_mock():
             Required('someOtherList', 'some_other_list'): List({
                 Required('innerString', 'inner_string'): String(),
                 Required('innerInt', 'inner_int'): Integer()
-            })
+            }),
+        Required('someEnum', 'some_enum'): Enum(set(('asd', '2')))
         }
     })
-    schema.to_dto(schema.mock())
+    schema.to_native(schema.to_dto(schema.mock()))
 
 
 # test require and optional markers do what they must
