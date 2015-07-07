@@ -395,15 +395,18 @@ class String(Converter):
     ... except MultipleInvalid as e:
     ...     pass
     """
+    def _validate(self, data):
+        if data in (None, ''):
+            raise RequiredInvalid('string field is empty')
+        if not isinstance(data, strtype):
+            raise TypeInvalid('not a string')
 
     def to_native(self, data):
         return self.to_dto(data)
 
     def to_dto(self, data):
-        result = str(data)
-        if not result:
-            return None
-        return result
+        self._validate(data)
+        return data
 
     def mock(self):
         """
@@ -569,7 +572,6 @@ class DateTime(Converter):
     ...     result = schema.to_dto({'aDate': None})
     ...     assert False, 'an exception should be raised'
     ... except MultipleInvalid as e:
-    ...     assert isinstance(e.errors[0], TypeInvalid)
     ...     assert e.errors[0].path == ['aDate'], '%r' % e.errors[0].path
     """
 
@@ -692,11 +694,6 @@ class Dict(Converter):
     ... except MultipleInvalid:
     ...     pass
 
-    >>> schema = Schema({
-    ...     Optional('aString'): Decimal()
-    ... })
-    >>> assert {} == schema.to_dto({'aString': None})
-
     """
 
     def __init__(self, inner_schema):
@@ -760,14 +757,12 @@ class Dict(Converter):
             else:
                 key, substitution_key = marker.native_name, marker.dto_name
                 method = getattr(converter, 'to_dto')
-            if key in data and data[key] not in (None, ''):
+            if key in data:
                 value = self._process_value(method, data.pop(key), key, errors)
                 if isinstance(marker, Inclusive):
                     inclusive[marker.monitor].add(substitution_key)
                 result[substitution_key] = value
             else:
-                if key in data:
-                    data.pop(key)
                 if isinstance(marker, Required):
                     errors.append(RequiredInvalid('required field is missing',
                                                   [key]))
@@ -1008,7 +1003,7 @@ class Object(Converter):
         if not isinstance(inner_schema, dict):
             raise SchemaError('expected a dictionary')
         if object_initializator is None or \
-                str(object_initializator) == '__init__':
+                        str(object_initializator) == '__init__':
             self.object_constructor = None
         elif isinstance(object_initializator, strtype):
             self.object_constructor = getattr(object_class,
