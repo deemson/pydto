@@ -692,6 +692,11 @@ class Dict(Converter):
     ... except MultipleInvalid:
     ...     pass
 
+    >>> schema = Schema({
+    ...     Optional('aString'): Decimal()
+    ... })
+    >>> assert {} == schema.to_dto({'aString': None})
+
     """
 
     def __init__(self, inner_schema):
@@ -755,12 +760,14 @@ class Dict(Converter):
             else:
                 key, substitution_key = marker.native_name, marker.dto_name
                 method = getattr(converter, 'to_dto')
-            if key in data:
+            if key in data and data[key] not in (None, ''):
                 value = self._process_value(method, data.pop(key), key, errors)
                 if isinstance(marker, Inclusive):
                     inclusive[marker.monitor].add(substitution_key)
                 result[substitution_key] = value
             else:
+                if key in data:
+                    data.pop(key)
                 if isinstance(marker, Required):
                     errors.append(RequiredInvalid('required field is missing',
                                                   [key]))
