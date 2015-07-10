@@ -173,23 +173,6 @@ assert 'Smith' == user.last_name
 assert user.birth_date.date() == datetime(1977, 8, 5).date()
 ```
 
-## Mocking ##
-
-Another cool feature of PyDto - it's able to create mocks using your schema:
-
-```python
-mock_object = schema.mock()
-print(mock_object)
-```
-
-Mock objects are always made with native Python datatypes. Pass the newly
-created mock to schema's `to_dto` method to convert fields to primitives:
-
-```python
-primitive_mock_object = schema.to_dto(mock_object)
-print(primitive_mock_object)
-```
-
 ## Partially applying schema to dictionaries and objects ##
 
 What if you need to validate only a portion of dictionary's keys? Or maybe you

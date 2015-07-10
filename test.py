@@ -1,7 +1,7 @@
 from datetime import datetime
 import decimal
 from nose.tools import assert_equal, assert_raises, assert_true
-from pydto2 import Schema, Required, Optional, MultipleInvalid, List, \
+from pydto import Schema, Required, Optional, MultipleInvalid, List, \
     MakeObject
 
 

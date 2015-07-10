@@ -12,7 +12,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.3.4'
+__version__ = '0.4.0'
 
 
 class Error(Exception):
@@ -22,23 +22,27 @@ class Error(Exception):
 class SchemaError(Error):
     """An error was encountered in the schema."""
 
-
-class Invalid(Error):
-    """The data was invalid.
-
-    :attr msg: The error message.
-    :attr path: The path to the error, as a list of keys in the source data.
-    :attr error_message: The actual error message that was raised, as a
-        string.
-
-    """
-
-    def __init__(self, message, path=None, error_message=None,
-                 error_type=None):
+    def __init__(self, message, path=None):
         Error.__init__(self, message)
         self.path = path or []
-        self.error_message = error_message or message
-        self.error_type = error_type
+
+    @property
+    def msg(self):
+        return self.args[0]
+
+    def __str__(self):
+        path = ' @ schema[%s]' % ']['.join(map(repr, self.path)) \
+            if self.path else ''
+        output = Exception.__str__(self)
+        return output + path
+
+
+class Invalid(Error):
+    """The data was invalid."""
+
+    def __init__(self, message, path=None):
+        Error.__init__(self, message)
+        self.path = path or []
 
     @property
     def msg(self):
@@ -48,8 +52,6 @@ class Invalid(Error):
         path = ' @ data[%s]' % ']['.join(map(repr, self.path)) \
             if self.path else ''
         output = Exception.__str__(self)
-        if self.error_type:
-            output += ' for ' + self.error_type
         return output + path
 
 
@@ -138,33 +140,208 @@ class Undefined(object):
 UNDEFINED = Undefined()
 
 
-class Schema(object):
-    def __init__(self, schema):
-        self._schema = self._compile(schema)
+class Extras(object):
+    values = ['prevent', 'allow', 'remove']
+    PREVENT, ALLOW, REMOVE = values
+
+
+class _Compile(object):
+    PRIMITIVE_TYPES = (strtype, int, decimal.Decimal, float,
+                       complex, bool)
 
     @classmethod
-    def _compile(cls, schema):
+    def compile(cls, schema, extras):
         if isinstance(schema, dict):
-            return Dict(schema)
-        elif isinstance(schema, (Dict, List, Enum, FixedList)):
-            return schema
-        elif isinstance(schema, strtype):
-            return Literal(str, schema)
-        elif isinstance(schema, int):
-            return Literal(int, schema)
-        elif isinstance(schema, bool):
-            return Literal(ParseBoolean(), schema)
-        elif isinstance(schema, decimal.Decimal):
-            return Literal(ParseDecimal(), schema)
-        elif isinstance(schema, set):
-            return Enum(schema)
+            return cls.compile_dict(schema, extras)
         elif isinstance(schema, (list, tuple)):
-            return FixedList(schema)
+            return cls.compile_fixed_list(schema, extras)
+        elif isinstance(schema, Dict):
+            extras = schema.extras or extras
+            return cls.compile_dict(schema.inner_schema, extras)
+        elif isinstance(schema, List):
+            return cls.compile_list(schema.inner_schema, extras)
+        elif isinstance(schema, FixedList):
+            return cls.compile_fixed_list(schema.inner_schemas, extras)
+        elif isinstance(schema, cls.PRIMITIVE_TYPES):
+            return cls.compile_literal(schema, type(schema))
+        elif isinstance(schema, Literal):
+            return cls.compile_literal(schema.value, schema.converter)
+        elif isinstance(schema, set):
+            return cls.compile_enum(schema, extras)
+        elif isinstance(schema, Enum):
+            return cls.compile_enum(schema.values, extras)
+        elif isinstance(schema, MakeObject):
+            return cls.compile_make_object(schema, extras)
         elif callable(schema):
             return schema
         else:
             raise SchemaError('%s is not a valid value in schema'
                               % type(schema))
+
+    @classmethod
+    def compile_dict(cls, dict_schema, extras):
+        compiled_inner_schema = {}
+        for key, value in iteritems(dict_schema):
+            if not isinstance(key, Marker):
+                raise SchemaError('keys in schema dictionaries must'
+                                  ' be instances of Marker class')
+            compiled_inner_schema[key] = cls.compile(value, extras)
+
+        def compiled_dict(data):
+            if not isinstance(data, dict):
+                raise DictInvalid('expected a dictionary, got %r instead'
+                                  % data)
+            # Make a copy of incoming dictionary to pop items
+            # without changing data
+            data = dict(data)
+            result = {}
+            inclusive = defaultdict(set)
+            errors = []
+            for marker, converter in iteritems(compiled_inner_schema):
+                key = marker.name
+                substitution_key = marker.rename_to or key
+                if key in data:
+                    try:
+                        value = converter(data.pop(key))
+                        if isinstance(marker, Inclusive):
+                            inclusive[marker.monitor].add(key)
+                        result[substitution_key] = value
+                    except MultipleInvalid as e:
+                        errs = [ie for ie in e.errors]
+                        for e in errs:
+                            e.path = [key] + e.path
+                        errors.extend(errs)
+                    except Invalid as e:
+                        e.path = [key] + e.path
+                        errors.append(e)
+                    except Exception as e:
+                        errors.append(Invalid(str(e), [key]))
+
+                else:
+                    if isinstance(marker, Required):
+                        errors.append(
+                            RequiredInvalid('required field is missing',
+                                            [key]))
+            if data:
+                if extras == Extras.PREVENT:
+                    for unknown_field in data.keys():
+                        errors.append(UnknownInvalid('unknown field',
+                                                     [unknown_field]))
+                elif extras == Extras.ALLOW:
+                    for unknown_field in data.keys():
+                        result[unknown_field] = data[unknown_field]
+            if errors:
+                raise MultipleInvalid(errors)
+            return result
+
+        return compiled_dict
+
+    @classmethod
+    def compile_list(cls, list_schema, extras):
+        compiled_inner_schema = cls.compile(list_schema, extras)
+
+        def compiled_list(data):
+            if not isinstance(data, list):
+                if not isinstance(data, list):
+                    raise ListInvalid('expected a list, got %r instead'
+                                      % type(data))
+            result = []
+            errors = []
+            for idx, d in enumerate(data):
+                try:
+                    result.append(compiled_inner_schema(d))
+                except MultipleInvalid as e:
+                    errs = [ie for ie in e.errors]
+                    for e in errs:
+                        e.path = [idx] + e.path
+                    errors.extend(errs)
+                except Invalid as e:
+                    e.path = [idx] + e.path
+                    errors.append(e)
+                except Exception as e:
+                    errors.append(Invalid(str(e), [idx]))
+            if errors:
+                raise MultipleInvalid(errors)
+            return result
+
+        return compiled_list
+
+    @classmethod
+    def compile_literal(cls, value, converter):
+        def compiled_literal(data):
+            converted_data = converter(data)
+            if value != converted_data:
+                raise LiteralInvalid('value %r is not equal to %r'
+                                     % (converted_data, value))
+            return converted_data
+
+        return compiled_literal
+
+    @classmethod
+    def compile_enum(cls, values, extras):
+        compiled_values = []
+        for v in values:
+            if isinstance(v, cls.PRIMITIVE_TYPES):
+                compiled_values.append(cls.compile_literal(v, type(v)))
+            elif isinstance(v, Literal):
+                compiled_values.append(cls.compile_literal(v.value,
+                                                           v.converter))
+            else:
+                raise SchemaError('only literal values allowed in Enum')
+
+        compiled_values = [cls.compile(v, extras) for v in values]
+
+        def compiled_enum(data):
+            for v in compiled_values:
+                try:
+                    return v(data)
+                except:
+                    pass
+            raise EnumInvalid('none of enum values matches %r' % data)
+
+        return compiled_enum
+
+    @classmethod
+    def compile_fixed_list(cls, fixed_list_schema, extras):
+        compiled_inner_schemas = [cls.compile(inn_sch, extras)
+                                  for inn_sch in fixed_list_schema]
+
+        def compiled_fixed_list(data):
+            if not isinstance(data, list):
+                raise ListInvalid('expected a list, got %r instead'
+                                  % type(data))
+            if len(data) != len(compiled_inner_schemas):
+                raise FixedListLengthInvalid(
+                    'the length of %r must be equal to %d'
+                    % (data, len(compiled_inner_schemas)))
+            return [c(v) for c, v in zip(compiled_inner_schemas, data)]
+
+        return compiled_fixed_list
+
+    @classmethod
+    def compile_make_object(cls, make_object_schema, extras):
+        compiled_dict = cls.compile_dict(make_object_schema.inner_schema,
+                                         extras)
+
+        def compiled_make_object(data):
+            dict_data = compiled_dict(data)
+            if make_object_schema.object_constructor is None:
+                return make_object_schema.object_class(**dict_data)
+            else:
+                o = make_object_schema.object_class()
+                make_object_schema.object_constructor(o, **dict_data)
+                return o
+
+        return compiled_make_object
+
+
+class Schema(object):
+    """
+    PyDTO main object.
+    """
+
+    def __init__(self, schema, extras=Extras.PREVENT):
+        self._schema = _Compile.compile(schema, extras)
 
     def __call__(self, data):
         try:
@@ -199,10 +376,16 @@ class Inclusive(Marker):
         return self
 
 
-class Literal(object):
+class SpecialForm(object):
+    def __call__(self, *args, **kwargs):
+        raise SchemaError('special forms must not be called directly. '
+                          'You must pass them to PyDTO Schema '
+                          'constructor instead')
+
+
+class Literal(SpecialForm):
     """
-    Wraps a converter (like String() or Integer()) to be a literal to some
-    value:
+    Marks a field in a schema as a literal value:
 
     >>> schema = Schema({Required('aString'): Literal(str, 'hello')})
     >>> assert {'aString': 'hello'} == schema({'aString': 'hello'})
@@ -213,7 +396,7 @@ class Literal(object):
     ...     pass
 
     It is more concise to use simple type literals for simple types
-    (string, integer, decimal and boolean):
+    (string, integer, decimal, boolean and complex):
 
     >>> schema = Schema({Required('anInt'): 3})
     >>> assert {'anInt': 3} == schema({'anInt': '3'})
@@ -226,18 +409,11 @@ class Literal(object):
     """
 
     def __init__(self, converter, value):
-        self._converter = converter
-        self._value = value
-
-    def __call__(self, data):
-        converted_data = self._converter(data)
-        if converted_data != self._value:
-            raise LiteralInvalid('value %r is not equal to %r'
-                                 % (converted_data, self._value))
-        return converted_data
+        self.converter = converter
+        self.value = value
 
 
-class Dict(object):
+class Dict(SpecialForm):
     """
     Marks a field in a schema as a dictionary field, containing objects, that
     conform to inner schema:
@@ -278,65 +454,33 @@ class Dict(object):
     ... except MultipleInvalid:
     ...     pass
 
+    Unless it is explicitly stated otherwise using Dict object:
+
+    >>> schema = Schema(Dict({
+    ...     Required('aString'): str
+    ... }, Extras.REMOVE))
+    >>> res = schema({'aString': 'hello', 'anUnknownString': 'hello again'})
+    >>> assert res == {'aString': 'hello'}
+
+    ...or for the whole Schema:
+
+    >>> schema = Schema({
+    ...     Optional('aString'): str
+    ... }, extras=Extras.ALLOW)
+    >>> res = schema({'anUnknownString': 'hello'})
+    >>> assert res == {'anUnknownString': 'hello'}
+
     """
 
-    def __init__(self, inner_schema):
+    def __init__(self, inner_schema, extras=None):
         if not isinstance(inner_schema, dict):
             raise SchemaError('expected a dictionary, got %r instead'
                               % inner_schema)
-        compiled_inner_schema = {}
-        for key, value in iteritems(inner_schema):
-            if not isinstance(key, Marker):
-                raise SchemaError('keys in schema should'
-                                  ' be instances of Marker class')
-            compiled_inner_schema[key] = Schema._compile(value)
-        self._inner_schema = compiled_inner_schema
-
-    def __call__(self, data):
-        if not isinstance(data, dict):
-            raise DictInvalid('expected a dictionary, got %r instead'
-                              % data)
-        # Make a copy of incoming dictionary to pop items
-        # without changing data
-        data = dict(data)
-        result = {}
-        inclusive = defaultdict(set)
-        errors = []
-        for marker, converter in iteritems(self._inner_schema):
-            key = marker.name
-            substitution_key = marker.rename_to or key
-            if key in data:
-                try:
-                    value = converter(data.pop(key))
-                    if isinstance(marker, Inclusive):
-                        inclusive[marker.monitor].add(key)
-                    result[substitution_key] = value
-                except MultipleInvalid as e:
-                    errs = [ie for ie in e.errors]
-                    for e in errs:
-                        e.path = [key] + e.path
-                    errors.extend(errs)
-                except Invalid as e:
-                    e.path = [key] + e.path
-                    errors.append(e)
-                except Exception as e:
-                    errors.append(Invalid('error converting value',
-                                          [key]))
-
-            else:
-                if isinstance(marker, Required):
-                    errors.append(RequiredInvalid('required field is missing',
-                                                  [key]))
-        if data:
-            for unknown_field in data.keys():
-                errors.append(UnknownInvalid('unknown field',
-                                             [unknown_field]))
-        if errors:
-            raise MultipleInvalid(errors)
-        return result
+        self.inner_schema = inner_schema
+        self.extras = extras
 
 
-class List(object):
+class List(SpecialForm):
     """
     Marks a field in a schema as a list field, containing objects, that
     conform to inner schema:
@@ -348,93 +492,34 @@ class List(object):
     """
 
     def __init__(self, inner_schema):
-        self._inner_schema = Schema._compile(inner_schema)
-
-    def __call__(self, data):
-        if not isinstance(data, list):
-            if not isinstance(data, list):
-                raise ListInvalid('expected a list, got %r instead' % data)
-        result = []
-        errors = []
-        for idx, d in enumerate(data):
-            try:
-                result.append(self._inner_schema(d))
-            except MultipleInvalid as e:
-                errs = [ie for ie in e.errors]
-                for e in errs:
-                    e.path = [idx] + e.path
-                errors.extend(errs)
-            except Invalid as e:
-                e.path = [idx] + e.path
-                errors.append(e)
-        if errors:
-            raise MultipleInvalid(errors)
-        return result
+        self.inner_schema = inner_schema
 
 
-class ParseBoolean(object):
-    TRUTH_VALUES = ['true', 't', 'yes', 'y', '1']
-    FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
+class Enum(SpecialForm):
+    """
+    Marks a field in a schema as a value, chosen from a fixed set:
 
-    def __init__(self, strict=True):
-        """
-        :param strict: when True, values supplied to this converter
-        are expected to be in either TRUE_VALUES or FALSE_VALUES.
-        Setting this to False will force Boolean to conform to
-        default Python truth rules.
-        """
-        self.strict = strict
+    >>> schema = Schema(Enum('June', 6, 'VI'))
+    >>> assert 6 == schema('6')
+    >>> assert 'VI' == schema('VI')
+    >>> try:
+    ...     schema('V')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
 
-    def __call__(self, value):
-        if value in [True, False]:
-            return value
-        else:
-            if self.strict:
-                data = str(value)
-                if data in self.TRUTH_VALUES:
-                    return True
-                elif data in self.FALSE_VALUES:
-                    return False
-                else:
-                    raise TypeInvalid(
-                        'a strict boolean should be '
-                        'either one of %r or one of %r'
-                        % (self.TRUTH_VALUES, self.FALSE_VALUES)
-                    )
-            else:
-                return bool(value)
+    Set can be used to mark a field as Enum as well as set literal '{}' in
+    Python 2.7+:
+
+    >>> schema = Schema(set(('June', 6, 'VI')))
+    >>> assert 'VI' == schema('VI')
+    """
+
+    def __init__(self, *values):
+        self.values = set(values)
 
 
-class ParseDecimal(object):
-    def __call__(self, value):
-        try:
-            if not isinstance(value, (strtype, int)):
-                raise TypeInvalid('value for a decimal can be only '
-                                  'a string or an int, got %r instead'
-                                  % value)
-            return decimal.Decimal(value)
-        except (TypeError, ValueError, decimal.DecimalException) as e:
-            raise TypeInvalid('bad decimal number %r: %r' % (value, e))
-
-
-class ParseDateTime(object):
-    def __init__(self, datetime_format='%Y-%m-%d %H:%M.%S'):
-        try:
-            datetime.strptime(datetime.utcnow().strftime(datetime_format),
-                              datetime_format)
-        except (TypeError, ValueError) as e:
-            raise SchemaError(
-                'bad datetime format %r: %r' % (datetime_format, e))
-        self.datetime_format = datetime_format
-
-    def __call__(self, value):
-        try:
-            return datetime.strptime(value, self.datetime_format)
-        except (TypeError, ValueError) as e:
-            raise TypeInvalid('bad datetime %r: %r' % (value, e))
-
-
-class MakeObject(object):
+class MakeObject(SpecialForm):
     """
 
     Marks a field in a schema for an object creation:
@@ -481,7 +566,8 @@ class MakeObject(object):
         elif isinstance(object_initializator, strtype):
             self.object_constructor = getattr(object_class,
                                               object_initializator)
-            if not self.object_constructor:
+            if not self.object_constructor or \
+                not callable(self.object_constructor):
                 raise SchemaError('%s does not have a method named %s'
                                   % (object_class, object_initializator))
         elif callable(object_initializator):
@@ -495,19 +581,10 @@ class MakeObject(object):
                               % object_class)
 
         self.object_class = object_class
-        self._inner_schema = Schema._compile(inner_schema)
-
-    def __call__(self, value):
-        dict_data = self._inner_schema(value)
-        if self.object_constructor is None:
-            return self.object_class(**dict_data)
-        else:
-            o = self.object_class()
-            self.object_constructor(o, **dict_data)
-            return o
+        self.inner_schema = inner_schema
 
 
-class FixedList(object):
+class FixedList(SpecialForm):
     """
     Marks a field in a schema as a list of fixed length. Every element in the
     list has it's own type. You can use Python's list or tuple data types for
@@ -527,48 +604,140 @@ class FixedList(object):
         if not isinstance(inner_schemas, (list, tuple)):
             raise SchemaError('expected a list or a tuple, got %r '
                               'instead' % inner_schemas)
-        self._inner_schemas = tuple(Schema._compile(sch)
-                                    for sch in inner_schemas)
+        self.inner_schemas = inner_schemas
+
+
+class ParseBoolean(object):
+    TRUTH_VALUES = ['true', 't', 'yes', 'y', '1']
+    FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
+
+    def __init__(self, strict=True):
+        """
+        :param strict: when True, values supplied to this converter
+        are expected to be in either TRUE_VALUES or FALSE_VALUES.
+        Setting this to False will force Boolean to conform to
+        default Python truth rules.
+        """
+        self.strict = strict
 
     def __call__(self, value):
-        if not isinstance(value, list):
-            raise ListInvalid('expected a list, got %r instead' % value)
-        if len(value) != len(self._inner_schemas):
-            raise FixedListLengthInvalid('%r length is not equal to %d'
-                                         % (value, len(self._inner_schemas)))
-        return [c(v) for c, v in zip(self._inner_schemas, value)]
+        if value in [True, False]:
+            return value
+        else:
+            if self.strict:
+                data = str(value)
+                if data in self.TRUTH_VALUES:
+                    return True
+                elif data in self.FALSE_VALUES:
+                    return False
+                else:
+                    raise TypeInvalid(
+                        'a strict boolean should be '
+                        'either one of %r or one of %r'
+                        % (self.TRUTH_VALUES, self.FALSE_VALUES)
+                    )
+            else:
+                return bool(value)
 
 
-class Enum(object):
+class ParseDecimal(object):
     """
-    Marks a field in a schema as a list of fixed length. Every element in the
-    list has it's own type. You can use Python's list or tuple data types for
-    FixedList specification:
+    Parses a string in a schema into a decimal number:
 
-    >>> schema = Schema(set(('June', 6, 'VI')))
-    >>> assert 6 == schema('6')
-    >>> assert 'VI' == schema('VI')
+    >>> schema = Schema({Required('dec'): ParseDecimal()})
+    >>> res = schema({'dec': '12.3'})
+    >>> assert res
+    >>> assert 'dec' in res
+    >>> assert res['dec'] == decimal.Decimal('12.3')
+
+    By default ParseDecimal will raise errors for float arguments:
+
+    >>> schema = Schema({Required('dec'): ParseDecimal()})
     >>> try:
-    ...     schema('V')
+    ...     schema({'dec': 123.45})
     ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid:
     ...     pass
+
+    This can be changed using `float_is_ok` method:
+
+    >>> schema = Schema({Required('dec'): ParseDecimal().float_is_ok()})
+    >>> res = schema({'dec': 1.1})
+    >>> assert res['dec'] == decimal.Decimal('1.1')
+
+
     """
+    def __init__(self):
+        self._float_is_ok = False
 
-    def __init__(self, values):
-        values = set([Schema._compile(v) for v in values])
-        for v in values:
-            if not isinstance(v, Literal):
-                raise SchemaError('only literal values supported in enum')
-        self._values = values
+    def float_is_ok(self):
+        self._float_is_ok = True
+        return self
 
-    def __call__(self, data):
-        for v in self._values:
-            try:
-                return v(data)
-            except:
-                pass
-        raise EnumInvalid('none of enum values matches %r' % data)
+    def __call__(self, value):
+        if isinstance(value, float):
+            if self._float_is_ok:
+                value = str(value)
+            else:
+                raise TypeInvalid('cannot convert decimal from float: '
+                                  'possible loss of precision - '
+                                  'use float_is_ok method '
+                                  'to force float conversion')
+        try:
+            if not isinstance(value, (strtype, int)):
+                raise TypeInvalid('value for a decimal can be only one of '
+                                  '%r, got %r instead'
+                                  % ((strtype, int), type(value)))
+            return decimal.Decimal(value)
+        except (TypeError, ValueError, decimal.DecimalException) as e:
+            raise TypeInvalid('bad decimal number %r: %r' % (value, e))
+
+
+class ParseDateTime(object):
+    """
+    Tries to parse a datetime from a string in a schema:
+
+    >>> schema = Schema({Required('aDateTime'): ParseDateTime()})
+    >>> dt = schema({'aDateTime': '2000-05-01 12:36:51'})
+    >>> assert dt
+    >>> assert 'aDateTime' in dt
+    >>> assert isinstance(dt['aDateTime'], datetime)
+    >>> assert datetime(2000, 05, 01, 12, 36, 51) == dt['aDateTime']
+
+    Datetime can only be parsed from strings:
+
+    >>> schema = Schema({Required('aDateTime'): ParseDateTime()})
+    >>> try:
+    ...     schema({'aDateTime': 5})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    Incorrect datetime formats will raise error upon the schema creation:
+
+    >>> try:
+    ...     schema = Schema({Required('aDateTime'): ParseDateTime('%123')})
+    ...     assert False, "an exception should've been raised"
+    ... except SchemaError:
+    ...     pass
+
+    """
+    def __init__(self, datetime_format='%Y-%m-%d %H:%M:%S'):
+        try:
+            datetime.strptime(datetime.utcnow().strftime(datetime_format),
+                              datetime_format)
+        except (TypeError, ValueError) as e:
+            raise SchemaError(
+                'bad datetime format %r: %r' % (datetime_format, e))
+        self.datetime_format = datetime_format
+
+    def __call__(self, value):
+        if not isinstance(value, strtype):
+            raise TypeInvalid('datetime can only be parsed from string')
+        try:
+            return datetime.strptime(value, self.datetime_format)
+        except (TypeError, ValueError) as e:
+            raise TypeInvalid('bad datetime %r: %r' % (value, e))
 
 
 class UnvalidatedDict(object):
