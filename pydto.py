@@ -702,7 +702,7 @@ class ParseDateTime(object):
     >>> assert dt
     >>> assert 'aDateTime' in dt
     >>> assert isinstance(dt['aDateTime'], datetime)
-    >>> assert datetime(2000, 05, 01, 12, 36, 51) == dt['aDateTime']
+    >>> assert datetime(2000, 5, 1, 12, 36, 51) == dt['aDateTime']
 
     Datetime can only be parsed from strings:
 
