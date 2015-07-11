@@ -103,6 +103,10 @@ class EnumInvalid(Invalid):
     """Enum does not contain value provided."""
 
 
+class NoneInvalid(Invalid):
+    """Got None value."""
+
+
 class MultipleInvalid(Invalid):
     def __init__(self, errors=None):
         self.errors = errors[:] if errors else []
@@ -350,6 +354,8 @@ class Schema(object):
             raise
         except Invalid as e:
             raise MultipleInvalid([e])
+        except Exception as e:
+            raise MultipleInvalid([Invalid(str(e))])
 
 
 class Marker(object):
@@ -561,13 +567,13 @@ class MakeObject(SpecialForm):
         if not isinstance(inner_schema, dict):
             raise SchemaError('expected a dictionary')
         if object_initializator is None or \
-                str(object_initializator) == '__init__':
+                        str(object_initializator) == '__init__':
             self.object_constructor = None
         elif isinstance(object_initializator, strtype):
             self.object_constructor = getattr(object_class,
                                               object_initializator)
             if not self.object_constructor or \
-                not callable(self.object_constructor):
+                    not callable(self.object_constructor):
                 raise SchemaError('%s does not have a method named %s'
                                   % (object_class, object_initializator))
         elif callable(object_initializator):
@@ -587,7 +593,13 @@ class MakeObject(SpecialForm):
 class FixedList(SpecialForm):
     """
     Marks a field in a schema as a list of fixed length. Every element in the
-    list has it's own type. You can use Python's list or tuple data types for
+    list has it's own type:
+
+    >>> schema = Schema(FixedList(str, ParseDecimal(), int))
+    >>> res = schema(['asd', '43.7', '8'])
+    >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
+
+    You can use Python's list or tuple data types for
     FixedList specification:
 
     >>> schema = Schema([str, ParseDecimal(), int])
@@ -600,44 +612,77 @@ class FixedList(SpecialForm):
     >>> assert decimal.Decimal('12.2') == res[1]
     """
 
-    def __init__(self, inner_schemas):
-        if not isinstance(inner_schemas, (list, tuple)):
-            raise SchemaError('expected a list or a tuple, got %r '
-                              'instead' % inner_schemas)
+    def __init__(self, *inner_schemas):
         self.inner_schemas = inner_schemas
 
 
+class NotNone(object):
+    def __call__(self, value):
+        if value is None:
+            raise NoneInvalid('value is None')
+        else:
+            return value
+
+
 class ParseBoolean(object):
-    TRUTH_VALUES = ['true', 't', 'yes', 'y', '1']
+    """
+    Consider using this class instead of good ol' bool if you need to ensure,
+    that your True and False values are parsed from a narrow set of allowed
+    values:
+
+    >>> schema = Schema(ParseBoolean())
+    >>> assert schema('yes')
+    >>> assert not schema('no')
+    >>> try:
+    ...     schema('blah-blah')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    You can get rid of exception raising by setting non_strict_false switch.
+    Although any string, that is not in TRUE_VALUES, still evaluates to False:
+
+    >>> schema = Schema(ParseBoolean().non_strict())
+    >>> assert schema('yes')
+    >>> assert not schema('no')
+    >>> assert not schema('azaza')
+
+    You can drop to standard Python truth evaluation by simply using bool
+
+    >>> schema = Schema(bool)
+    >>> assert schema('yes')
+    >>> assert schema('no')
+    >>> assert schema('azaza')
+    >>> assert not schema('')
+
+
+
+    """
+    TRUE_VALUES = ['true', 't', 'yes', 'y', '1']
     FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
 
     def __init__(self, strict=True):
-        """
-        :param strict: when True, values supplied to this converter
-        are expected to be in either TRUE_VALUES or FALSE_VALUES.
-        Setting this to False will force Boolean to conform to
-        default Python truth rules.
-        """
-        self.strict = strict
+        self._strict = strict
+
+    def non_strict(self):
+        self._strict = False
+        return self
 
     def __call__(self, value):
         if value in [True, False]:
             return value
         else:
-            if self.strict:
-                data = str(value)
-                if data in self.TRUTH_VALUES:
-                    return True
-                elif data in self.FALSE_VALUES:
-                    return False
-                else:
-                    raise TypeInvalid(
-                        'a strict boolean should be '
-                        'either one of %r or one of %r'
-                        % (self.TRUTH_VALUES, self.FALSE_VALUES)
-                    )
+            value = str(value)
+            if value in self.TRUE_VALUES:
+                return True
+            elif value in self.FALSE_VALUES:
+                return False
+            elif self._strict:
+                raise TypeError('value should be one of %r to be considered '
+                                'True or one of %r to be considered False'
+                                % (self.TRUE_VALUES, self.FALSE_VALUES))
             else:
-                return bool(value)
+                return False
 
 
 class ParseDecimal(object):
@@ -667,6 +712,7 @@ class ParseDecimal(object):
 
 
     """
+
     def __init__(self):
         self._float_is_ok = False
 
@@ -722,6 +768,7 @@ class ParseDateTime(object):
     ...     pass
 
     """
+
     def __init__(self, datetime_format='%Y-%m-%d %H:%M:%S'):
         try:
             datetime.strptime(datetime.utcnow().strftime(datetime_format),
@@ -787,3 +834,49 @@ class UnvalidatedList(object):
         if not isinstance(data, list):
             raise ListInvalid('expected a list, got %r instead' % data)
         return data
+
+
+class And(object):
+    """
+
+    Successively applies a list of callables to a value:
+
+    >>> schema = Schema(And(NotNone(), int))
+    >>> assert 5 == schema('5')
+    >>> try:
+    ...     schema(None)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid as e:
+    ...     assert isinstance(e.errors[0], NoneInvalid)
+
+    The list of callables must not be empty:
+
+    >>> try:
+    ...     schema = Schema(And())
+    ...     assert False, "an exception should've been raised"
+    ... except SchemaError:
+    ...     pass
+
+    And there must be no objects other than callables:
+
+    >>> try:
+    ...     schema = Schema(And(1))
+    ...     assert False, "an exception should've been raised"
+    ... except SchemaError:
+    ...     pass
+
+    """
+
+    def __init__(self, *functions):
+        if not functions:
+            raise SchemaError('no functions provided to And')
+        for f in functions:
+            if not callable(f):
+                raise SchemaError('only callables can be passed to And')
+        self._functions = functions
+
+    def __call__(self, data):
+        value = data
+        for f in self._functions:
+            value = f(value)
+        return value
