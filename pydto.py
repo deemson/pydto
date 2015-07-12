@@ -616,12 +616,45 @@ class FixedList(SpecialForm):
         self.inner_schemas = inner_schemas
 
 
+def not_none(value):
+    """
+    This function ensures that passed value is not None:
+
+    >>> schema = Schema(not_none)
+    >>> assert 1 == schema(1)
+    >>> try:
+    ...     schema(None)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+    if value is None:
+        raise NoneInvalid('value is None')
+    else:
+        return value
+
+
 class NotNone(object):
+    """
+    A convenience decorator alternative to not_none function:
+
+    >>> schema = Schema(NotNone(int))
+    >>> assert 5 == schema('5')
+    >>> try:
+    ...     schema(None)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+    def __init__(self, f):
+        if not callable(f):
+            raise SchemaError('NotNone is applicable only to callables')
+        self._f = f
+
     def __call__(self, value):
-        if value is None:
-            raise NoneInvalid('value is None')
-        else:
-            return value
+        return self._f(not_none(value))
 
 
 class ParseBoolean(object):
@@ -841,7 +874,7 @@ class And(object):
 
     Successively applies a list of callables to a value:
 
-    >>> schema = Schema(And(NotNone(), int))
+    >>> schema = Schema(And(not_none, int))
     >>> assert 5 == schema('5')
     >>> try:
     ...     schema(None)
