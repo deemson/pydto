@@ -149,47 +149,63 @@ class Extras(object):
     PREVENT, ALLOW, REMOVE = values
 
 
-class _Compile(object):
+class Schema(object):
+    """
+    PyDTO main object.
+    """
     PRIMITIVE_TYPES = (strtype, int, decimal.Decimal, float,
                        complex, bool)
 
-    @classmethod
-    def compile(cls, schema, extras):
+    def __init__(self, schema, extras=Extras.PREVENT):
+        self.extras = extras
+        self._schema = self._compile(schema)
+
+    def __call__(self, data):
+        try:
+            return self._schema(data)
+        except MultipleInvalid:
+            raise
+        except Invalid as e:
+            raise MultipleInvalid([e])
+        except Exception as e:
+            raise MultipleInvalid([Invalid(str(e))])
+
+    def _compile(self, schema):
         if isinstance(schema, dict):
-            return cls.compile_dict(schema, extras)
+            return self._compile_dict(schema, self.extras)
         elif isinstance(schema, (list, tuple)):
-            return cls.compile_fixed_list(schema, extras)
+            return self._compile_fixed_list(schema)
         elif isinstance(schema, Dict):
-            extras = schema.extras or extras
-            return cls.compile_dict(schema.inner_schema, extras)
+            extras = schema.extras or self.extras
+            return self._compile_dict(schema.inner_schema, extras)
         elif isinstance(schema, List):
-            return cls.compile_list(schema.inner_schema, extras)
+            return self._compile_list(schema.inner_schema)
         elif isinstance(schema, FixedList):
-            return cls.compile_fixed_list(schema.inner_schemas, extras)
-        elif isinstance(schema, cls.PRIMITIVE_TYPES):
-            return cls.compile_literal(schema, type(schema))
+            return self._compile_fixed_list(schema.inner_schemas)
+        elif isinstance(schema, self.PRIMITIVE_TYPES):
+            return self._compile_literal(schema, type(schema))
         elif isinstance(schema, Literal):
-            return cls.compile_literal(schema.value, schema.converter)
+            return self._compile_literal(schema.value, schema.converter)
         elif isinstance(schema, set):
-            return cls.compile_enum(schema, extras)
+            return self._compile_enum(schema)
         elif isinstance(schema, Enum):
-            return cls.compile_enum(schema.values, extras)
+            return self._compile_enum(schema.values)
         elif isinstance(schema, MakeObject):
-            return cls.compile_make_object(schema, extras)
+            extras = schema.extras or self.extras
+            return self._compile_make_object(schema, extras)
         elif callable(schema):
             return schema
         else:
             raise SchemaError('%s is not a valid value in schema'
                               % type(schema))
 
-    @classmethod
-    def compile_dict(cls, dict_schema, extras):
+    def _compile_dict(self, dict_schema, extras):
         compiled_inner_schema = {}
         for key, value in iteritems(dict_schema):
             if not isinstance(key, Marker):
                 raise SchemaError('keys in schema dictionaries must'
                                   ' be instances of Marker class')
-            compiled_inner_schema[key] = cls.compile(value, extras)
+            compiled_inner_schema[key] = self._compile(value)
 
         def compiled_dict(data):
             if not isinstance(data, dict):
@@ -240,9 +256,8 @@ class _Compile(object):
 
         return compiled_dict
 
-    @classmethod
-    def compile_list(cls, list_schema, extras):
-        compiled_inner_schema = cls.compile(list_schema, extras)
+    def _compile_list(self, list_schema):
+        compiled_inner_schema = self._compile(list_schema)
 
         def compiled_list(data):
             if not isinstance(data, list):
@@ -270,8 +285,7 @@ class _Compile(object):
 
         return compiled_list
 
-    @classmethod
-    def compile_literal(cls, value, converter):
+    def _compile_literal(self, value, converter):
         def compiled_literal(data):
             converted_data = converter(data)
             if value != converted_data:
@@ -281,19 +295,18 @@ class _Compile(object):
 
         return compiled_literal
 
-    @classmethod
-    def compile_enum(cls, values, extras):
+    def _compile_enum(self, values):
         compiled_values = []
         for v in values:
-            if isinstance(v, cls.PRIMITIVE_TYPES):
-                compiled_values.append(cls.compile_literal(v, type(v)))
+            if isinstance(v, self.PRIMITIVE_TYPES):
+                compiled_values.append(self._compile_literal(v, type(v)))
             elif isinstance(v, Literal):
-                compiled_values.append(cls.compile_literal(v.value,
-                                                           v.converter))
+                compiled_values.append(self._compile_literal(v.value,
+                                                             v.converter))
             else:
                 raise SchemaError('only literal values allowed in Enum')
 
-        compiled_values = [cls.compile(v, extras) for v in values]
+        compiled_values = [self._compile(v) for v in values]
 
         def compiled_enum(data):
             for v in compiled_values:
@@ -305,9 +318,8 @@ class _Compile(object):
 
         return compiled_enum
 
-    @classmethod
-    def compile_fixed_list(cls, fixed_list_schema, extras):
-        compiled_inner_schemas = [cls.compile(inn_sch, extras)
+    def _compile_fixed_list(self, fixed_list_schema):
+        compiled_inner_schemas = [self._compile(inn_sch)
                                   for inn_sch in fixed_list_schema]
 
         def compiled_fixed_list(data):
@@ -322,10 +334,9 @@ class _Compile(object):
 
         return compiled_fixed_list
 
-    @classmethod
-    def compile_make_object(cls, make_object_schema, extras):
-        compiled_dict = cls.compile_dict(make_object_schema.inner_schema,
-                                         extras)
+    def _compile_make_object(cls, make_object_schema, extras):
+        compiled_dict = cls._compile_dict(make_object_schema.inner_schema,
+                                          extras)
 
         def compiled_make_object(data):
             dict_data = compiled_dict(data)
@@ -337,25 +348,6 @@ class _Compile(object):
                 return o
 
         return compiled_make_object
-
-
-class Schema(object):
-    """
-    PyDTO main object.
-    """
-
-    def __init__(self, schema, extras=Extras.PREVENT):
-        self._schema = _Compile.compile(schema, extras)
-
-    def __call__(self, data):
-        try:
-            return self._schema(data)
-        except MultipleInvalid:
-            raise
-        except Invalid as e:
-            raise MultipleInvalid([e])
-        except Exception as e:
-            raise MultipleInvalid([Invalid(str(e))])
 
 
 class Marker(object):
@@ -553,7 +545,7 @@ class MakeObject(SpecialForm):
     """
 
     def __init__(self, object_class, inner_schema,
-                 object_initializator='__init__'):
+                 object_initializator='__init__', extras=None):
         """
         :param object_class: an object class
         :param inner_schema: a dictionary with inner object schema
@@ -561,6 +553,8 @@ class MakeObject(SpecialForm):
         to initialize object's params. All parsed schema params will be
         passed as \*\*kwargs to this method.
         If none supplied, object's constructor will be used.
+        :param extras: a strategy to deal with extra fields. See Schema
+         __init__ extras param for reference.
         """
         if not isinstance(object_class, type):
             raise SchemaError('expected a class')
@@ -588,6 +582,7 @@ class MakeObject(SpecialForm):
 
         self.object_class = object_class
         self.inner_schema = inner_schema
+        self.extras = extras
 
 
 class FixedList(SpecialForm):
