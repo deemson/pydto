@@ -425,7 +425,7 @@ class Dict(SpecialForm):
     conform to inner schema:
 
     >>> schema = Schema({
-    ...     Required('aDecimal'): ParseDecimal(),
+    ...     Required('aDecimal'): parse_decimal,
     ...     Optional('someString'): str,
     ...     Required('innerDict'): {
     ...         Required('anInt'): int
@@ -491,7 +491,7 @@ class List(SpecialForm):
     Marks a field in a schema as a list field, containing objects, that
     conform to inner schema:
 
-    >>> schema = Schema(List(ParseDecimal()))
+    >>> schema = Schema(List(parse_decimal))
     >>> res = schema([1, '2.5', 3])
     >>> assert res == [decimal.Decimal(1), decimal.Decimal('2.5'),
     ...                decimal.Decimal(3)]
@@ -567,13 +567,13 @@ class MakeObject(SpecialForm):
         if not isinstance(inner_schema, dict):
             raise SchemaError('expected a dictionary')
         if object_initializator is None or \
-                        str(object_initializator) == '__init__':
+                str(object_initializator) == '__init__':
             self.object_constructor = None
         elif isinstance(object_initializator, strtype):
             self.object_constructor = getattr(object_class,
                                               object_initializator)
             if not self.object_constructor or \
-                    not callable(self.object_constructor):
+                not callable(self.object_constructor):
                 raise SchemaError('%s does not have a method named %s'
                                   % (object_class, object_initializator))
         elif callable(object_initializator):
@@ -595,18 +595,18 @@ class FixedList(SpecialForm):
     Marks a field in a schema as a list of fixed length. Every element in the
     list has it's own type:
 
-    >>> schema = Schema(FixedList(str, ParseDecimal(), int))
+    >>> schema = Schema(FixedList(str, parse_decimal, int))
     >>> res = schema(['asd', '43.7', '8'])
     >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
 
     You can use Python's list or tuple data types for
     FixedList specification:
 
-    >>> schema = Schema([str, ParseDecimal(), int])
+    >>> schema = Schema([str, parse_decimal, int])
     >>> res = schema(['asd', '43.7', '8'])
     >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
 
-    >>> schema = Schema((ParseDateTime('%Y-%m-%d %H:%M.%S'), ParseDecimal()))
+    >>> schema = Schema((ParseDateTime('%Y-%m-%d %H:%M.%S'), parse_decimal))
     >>> res = schema(['1985-12-1 15:36.21', '12.2'])
     >>> assert datetime(1985, 12, 1, 15, 36, 21) == res[0]
     >>> assert decimal.Decimal('12.2') == res[1]
@@ -648,6 +648,7 @@ class NotNone(object):
     ...     pass
 
     """
+
     def __init__(self, f):
         if not callable(f):
             raise SchemaError('NotNone is applicable only to callables')
@@ -657,13 +658,17 @@ class NotNone(object):
         return self._f(not_none(value))
 
 
-class ParseBoolean(object):
+TRUE_VALUES = ['true', 't', 'yes', 'y', '1']
+FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
+
+
+def strict_boolean(value):
     """
     Consider using this class instead of good ol' bool if you need to ensure,
     that your True and False values are parsed from a narrow set of allowed
     values:
 
-    >>> schema = Schema(ParseBoolean())
+    >>> schema = Schema(strict_boolean)
     >>> assert schema('yes')
     >>> assert not schema('no')
     >>> try:
@@ -672,104 +677,54 @@ class ParseBoolean(object):
     ... except MultipleInvalid:
     ...     pass
 
-    You can get rid of exception raising by setting non_strict_false switch.
-    Although any string, that is not in TRUE_VALUES, still evaluates to False:
-
-    >>> schema = Schema(ParseBoolean().non_strict())
-    >>> assert schema('yes')
-    >>> assert not schema('no')
-    >>> assert not schema('azaza')
-
-    You can drop to standard Python truth evaluation by simply using bool
-
-    >>> schema = Schema(bool)
-    >>> assert schema('yes')
-    >>> assert schema('no')
-    >>> assert schema('azaza')
-    >>> assert not schema('')
-
-
-
     """
-    TRUE_VALUES = ['true', 't', 'yes', 'y', '1']
-    FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
-
-    def __init__(self, strict=True):
-        self._strict = strict
-
-    def non_strict(self):
-        self._strict = False
-        return self
-
-    def __call__(self, value):
-        if value in [True, False]:
-            return value
+    if value in [True, False]:
+        return value
+    else:
+        value = str(value)
+        if value in TRUE_VALUES:
+            return True
+        elif value in FALSE_VALUES:
+            return False
         else:
-            value = str(value)
-            if value in self.TRUE_VALUES:
-                return True
-            elif value in self.FALSE_VALUES:
-                return False
-            elif self._strict:
-                raise TypeError('value should be one of %r to be considered '
-                                'True or one of %r to be considered False'
-                                % (self.TRUE_VALUES, self.FALSE_VALUES))
-            else:
-                return False
+            raise TypeError('value should be one of %r to be considered '
+                            'True or one of %r to be considered False'
+                            % (TRUE_VALUES, FALSE_VALUES))
 
 
-class ParseDecimal(object):
+def parse_decimal(value):
     """
-    Parses a string in a schema into a decimal number:
+    Convenience function to parse a decimal from string:
 
-    >>> schema = Schema({Required('dec'): ParseDecimal()})
+    >>> schema = Schema({Required('dec'): parse_decimal})
     >>> res = schema({'dec': '12.3'})
     >>> assert res
     >>> assert 'dec' in res
     >>> assert res['dec'] == decimal.Decimal('12.3')
 
-    By default ParseDecimal will raise errors for float arguments:
+    Will raise errors for float arguments:
 
-    >>> schema = Schema({Required('dec'): ParseDecimal()})
+    >>> schema = Schema({Required('dec'): parse_decimal})
     >>> try:
     ...     schema({'dec': 123.45})
     ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid:
     ...     pass
 
-    This can be changed using `float_is_ok` method:
-
-    >>> schema = Schema({Required('dec'): ParseDecimal().float_is_ok()})
-    >>> res = schema({'dec': 1.1})
-    >>> assert res['dec'] == decimal.Decimal('1.1')
-
-
     """
-
-    def __init__(self):
-        self._float_is_ok = False
-
-    def float_is_ok(self):
-        self._float_is_ok = True
-        return self
-
-    def __call__(self, value):
-        if isinstance(value, float):
-            if self._float_is_ok:
-                value = str(value)
-            else:
-                raise TypeInvalid('cannot convert decimal from float: '
-                                  'possible loss of precision - '
-                                  'use float_is_ok method '
-                                  'to force float conversion')
-        try:
-            if not isinstance(value, (strtype, int)):
-                raise TypeInvalid('value for a decimal can be only one of '
-                                  '%r, got %r instead'
-                                  % ((strtype, int), type(value)))
-            return decimal.Decimal(value)
-        except (TypeError, ValueError, decimal.DecimalException) as e:
-            raise TypeInvalid('bad decimal number %r: %r' % (value, e))
+    if isinstance(value, float):
+        raise TypeInvalid('cannot convert decimal from float: '
+                          'possible loss of precision - '
+                          'convert a value to string '
+                          'to force float conversion')
+    try:
+        if not isinstance(value, (strtype, int)):
+            raise TypeInvalid('value for a decimal can be only one of '
+                              '%r, got %r instead'
+                              % ((strtype, int), type(value)))
+        return decimal.Decimal(value)
+    except (TypeError, ValueError, decimal.DecimalException) as e:
+        raise TypeInvalid('bad decimal number %r: %r' % (value, e))
 
 
 class ParseDateTime(object):
