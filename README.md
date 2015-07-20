@@ -29,7 +29,7 @@ examples.
 ## Simple example ##
 
 Simple example: to use PyDTO you must first define a schema. Then, you pass an
-object to a schema in a function-like fashion. Schema return another object,
+object to a schema in a function-like fashion. Schema returns another object,
 which is converted and validated:
 
 ```python
@@ -119,11 +119,21 @@ assert result == [
 ]
 ```
 
-In this example we introduce two more schema constructs: Enum and FixedList.
+In this example we introduced two more schema constructs: Enum and FixedList.
 You can see them in schema definition as `Enum('laptops', 'tablets', 'phones')`
-and `(str, int)`. Enums are what you expect them to be: a set of acceptable
-values. If the validated value is not equal to any of these values - an exception
-will be raised. Fixed lists are lists of fixed length and fixed types for each
-index. In the example a fixed list of string and integer value used. Tuples and lists
+and `(str, int)`.
+
+Enums are what you expect them to be: a set of acceptable values.
+If the validated value is not equal to any of these values - an exception
+will be raised. You can define enums with `set` constructor or set literal (in
+Python2.7+), i.e this `Enum('laptops', 'tablets', 'phones')`, this
+`set('laptops', 'tablets', 'phones')` and this `{'laptops', 'tablets', 'phones'}`
+all define the same enum. However, set function or set literals usage is
+discouraged, as it is much less clear what are your intentions are.
+
+Fixed lists are lists of fixed length and fixed types for each
+index. If the length of the validated list or any of the value types mismatch
+an exceptiona will be raised.
+In the example a fixed list of string and integer value used. Tuples and lists
 internally converted to FixedList object, i.e. instead of using `(str, int)` in a schema
 it is possble to use `[str, int]` or even `FixedList(str, int)`.
