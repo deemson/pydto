@@ -1,3 +1,8 @@
+v0.4.0
+======
+
+- complete rework. API changed
+
 v0.3.4
 ======
 
