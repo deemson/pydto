@@ -129,7 +129,7 @@ will be raised. You can define enums with `set` constructor or set literal (in
 Python2.7+), i.e this `Enum('laptops', 'tablets', 'phones')`, this
 `set('laptops', 'tablets', 'phones')` and this `{'laptops', 'tablets', 'phones'}`
 all define the same enum. However, set function or set literals usage is
-discouraged, as it is much less clear what are your intentions are.
+discouraged, as it is much less clear what your intentions are.
 
 Fixed lists are lists of fixed length and fixed types for each
 index. If the length of the validated list or any of the value types mismatch
@@ -137,3 +137,53 @@ an exceptiona will be raised.
 In the example a fixed list of string and integer value used. Tuples and lists
 internally converted to FixedList object, i.e. instead of using `(str, int)` in a schema
 it is possble to use `[str, int]` or even `FixedList(str, int)`.
+
+
+## Error handling ##
+
+PyDTO will raise SchemaError if your schema is not constructed properly:
+
+from pydto import Schema, Required
+
+```python
+SCHEMA = Schema({
+    Required('aField'): object()
+})
+```
+
+This code fragment will raise
+`pydto.SchemaError: <type 'object'> is not a valid value in schema`,
+as only callables allowed in Schema objects.
+
+As for data validation error handling, PyDTO will raise aggregated MultipleInvalid exception
+for every error it encounters during validation:
+
+```python
+from pydto import Schema, Required, List, MultipleInvalid
+
+SCHEMA = Schema({
+    Required('anInt'): int,
+    Required('aDict'): {
+        Required('aString'): str,
+        Required('aList'): List({
+            Required('anInt'): int
+        })
+    }
+})
+
+
+try:
+    SCHEMA({
+        'aDict': {
+            'aList': [{'anInt': 2}, {'anInt': 'asdf'}]
+        }
+    })
+except MultipleInvalid as mi:
+    for e in mi.errors:
+        print(e)
+
+# This code will print:
+# required field is missing @ data['anInt']
+# required field is missing @ data['aDict']['aString']
+# invalid literal for int() with base 10: 'asdf' @ data['aDict']['aList'][1]['anInt']
+```
