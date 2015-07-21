@@ -18,41 +18,72 @@ __version__ = '0.4.0'
 class Error(Exception):
     """Base validation exception."""
 
+    def __init__(self, message, path=None, data_name='data'):
+        Exception.__init__(self, message)
+        self.path = path or []
+        self.data_name = data_name
+
+    @property
+    def msg(self):
+        return self.args[0]
+
+    def __str__(self):
+        if self.path:
+            path = ' @ %s[%s]' % (self.data_name,
+                                  ']['.join(map(repr, self.path)))
+        else:
+            path = ''
+        output = Exception.__str__(self)
+        return output + path
+
+
+class MultipleError(Error):
+    def __init__(self, errors=None):
+        self.errors = errors[:] if errors else []
+
+    @classmethod
+    def _get_name(cls):
+        return cls.__name__
+
+    def __repr__(self):
+        return '%s(%r)' % (self._get_name(), self.errors)
+
+    @property
+    def msg(self):
+        return self.errors[0].msg
+
+    @property
+    def path(self):
+        return self.errors[0].path
+
+    def add(self, error):
+        self.errors.append(error)
+
+    def __str__(self):
+        return str(self.errors[0])
+
 
 class SchemaError(Error):
     """An error was encountered in the schema."""
 
     def __init__(self, message, path=None):
-        Error.__init__(self, message)
-        self.path = path or []
+        Error.__init__(self, message, path, data_name='schema')
 
-    @property
-    def msg(self):
-        return self.args[0]
+
+class MultipleSchemaError(MultipleError):
+    """An aggregator exception for errorsm that
+     were encountered in the schema."""
 
     def __str__(self):
-        path = ' @ schema[%s]' % ']['.join(map(repr, self.path)) \
-            if self.path else ''
-        output = Exception.__str__(self)
-        return output + path
+        return '\n%s' % '\n'.join(map(str, self.errors))
 
 
 class Invalid(Error):
     """The data was invalid."""
 
-    def __init__(self, message, path=None):
-        Error.__init__(self, message)
-        self.path = path or []
 
-    @property
-    def msg(self):
-        return self.args[0]
-
-    def __str__(self):
-        path = ' @ data[%s]' % ']['.join(map(repr, self.path)) \
-            if self.path else ''
-        output = Exception.__str__(self)
-        return output + path
+class MultipleInvalid(MultipleError):
+    """The aggregator exception for the data validation errors."""
 
 
 class RequiredInvalid(Invalid):
@@ -105,32 +136,6 @@ class EnumInvalid(Invalid):
 
 class NoneInvalid(Invalid):
     """Got None value."""
-
-
-class MultipleInvalid(Invalid):
-    def __init__(self, errors=None):
-        self.errors = errors[:] if errors else []
-
-    def __repr__(self):
-        return 'MultipleInvalid(%r)' % self.errors
-
-    @property
-    def msg(self):
-        return self.errors[0].msg
-
-    @property
-    def path(self):
-        return self.errors[0].path
-
-    @property
-    def error_message(self):
-        return self.errors[0].error_message
-
-    def add(self, error):
-        self.errors.append(error)
-
-    def __str__(self):
-        return str(self.errors[0])
 
 
 class Undefined(object):
@@ -201,11 +206,42 @@ class Schema(object):
 
     def _compile_dict(self, dict_schema, extras):
         compiled_inner_schema = {}
+        inclusive_monitors = defaultdict(set)
+        source_names = set()
+        destination_names = set()
+        errors = []
         for key, value in iteritems(dict_schema):
             if not isinstance(key, Marker):
-                raise SchemaError('keys in schema dictionaries must'
-                                  ' be instances of Marker class')
-            compiled_inner_schema[key] = self._compile(value)
+                errors.append(SchemaError('keys in schema dictionaries must'
+                                          ' be instances of Marker class',
+                                          [repr(key)]))
+                continue
+            if key.name in source_names:
+                errors.append(SchemaError('duplicate names',
+                                          [key.name]))
+                continue
+            if key.rename_to in destination_names:
+                errors.append(SchemaError('duplicate names',
+                                          [key.rename_to]))
+                continue
+            source_names.add(key.name)
+            destination_names.add(key.rename_to)
+            try:
+                compiled_inner_schema[key] = self._compile(value)
+            except MultipleSchemaError as e:
+                errs = [ie for ie in e.errors]
+                for e in errs:
+                    e.path = [key.name] + e.path
+                errors.extend(errs)
+            except SchemaError as e:
+                e.path = [key.name] + e.path
+                errors.append(e)
+            except Exception as e:
+                errors.append(SchemaError(str(e), [key.name]))
+            if isinstance(key, Inclusive):
+                inclusive_monitors[key.monitor].add(key.name)
+        if errors:
+            raise MultipleSchemaError(errors)
 
         def compiled_dict(data):
             if not isinstance(data, dict):
@@ -222,9 +258,9 @@ class Schema(object):
                 substitution_key = marker.rename_to or key
                 if key in data:
                     try:
-                        value = converter(data.pop(key))
                         if isinstance(marker, Inclusive):
                             inclusive[marker.monitor].add(key)
+                        value = converter(data.pop(key))
                         result[substitution_key] = value
                     except MultipleInvalid as e:
                         errs = [ie for ie in e.errors]
@@ -242,6 +278,16 @@ class Schema(object):
                         errors.append(
                             RequiredInvalid('required field is missing',
                                             [key]))
+            if inclusive:
+                for monitor, values in iteritems(inclusive):
+                    missing = inclusive_monitors[monitor] - values
+                    if missing:
+                        present = inclusive_monitors[monitor].intersection(
+                            values)
+                        errors.append(
+                            InclusiveInvalid('when fields %r are present, '
+                                             'fields %r should be present too'
+                                             % (list(missing), list(present))))
             if data:
                 if extras == Extras.PREVENT:
                     for unknown_field in data.keys():
@@ -296,15 +342,19 @@ class Schema(object):
         return compiled_literal
 
     def _compile_enum(self, values):
+        errors = []
         compiled_values = []
-        for v in values:
+        for idx, v in enumerate(values):
             if isinstance(v, self.PRIMITIVE_TYPES):
                 compiled_values.append(self._compile_literal(v, type(v)))
             elif isinstance(v, Literal):
                 compiled_values.append(self._compile_literal(v.value,
                                                              v.converter))
             else:
-                raise SchemaError('only literal values allowed in Enum')
+                errors.append(SchemaError('only literal values '
+                                          'allowed in Enum, got %r' % v))
+        if errors:
+            raise MultipleSchemaError(errors)
 
         compiled_values = [self._compile(v) for v in values]
 
@@ -319,8 +369,23 @@ class Schema(object):
         return compiled_enum
 
     def _compile_fixed_list(self, fixed_list_schema):
-        compiled_inner_schemas = [self._compile(inn_sch)
-                                  for inn_sch in fixed_list_schema]
+        compiled_inner_schemas = []
+        errors = []
+        for idx, inn_sch in enumerate(fixed_list_schema):
+            try:
+                compiled_inner_schemas.append(self._compile(inn_sch))
+            except MultipleSchemaError as e:
+                errs = [ie for ie in e.errors]
+                for e in errs:
+                    e.path = [idx] + e.path
+                errors.extend(errs)
+            except SchemaError as e:
+                e.path = [idx] + e.path
+                errors.append(e)
+            except Exception as e:
+                errors.append(SchemaError(str(e), [idx]))
+        if errors:
+            raise MultipleSchemaError(errors)
 
         def compiled_fixed_list(data):
             if not isinstance(data, list):
@@ -353,7 +418,11 @@ class Schema(object):
 class Marker(object):
     def __init__(self, name, rename_to=None):
         self.name = name
-        self.rename_to = rename_to
+        self._rename_to = rename_to
+
+    @property
+    def rename_to(self):
+        return self._rename_to or self.name
 
 
 class Required(Marker):
@@ -365,6 +434,22 @@ class Optional(Marker):
 
 
 class Inclusive(Marker):
+    """
+    Inclusive is used to make several dictionary values mutually inclusive:
+
+    >>> schema = Schema({
+    ...     Inclusive('one'): str,
+    ...     Inclusive('two'): str
+    ... })
+    >>> res = schema({'one': 'hello', 'two': 'world'})
+    >>> assert res == {'one': 'hello', 'two': 'world'}
+    >>> try:
+    ...     schema({'one': 'hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    """
+
     def __init__(self, name, rename_to=None, monitor=None):
         self.monitor = monitor
         super(Inclusive, self).__init__(name, rename_to)

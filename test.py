@@ -2,7 +2,23 @@ from datetime import datetime
 import decimal
 from nose.tools import assert_equal, assert_raises, assert_true
 from pydto import Schema, Required, Optional, MultipleInvalid, List, \
-    MakeObject
+    MakeObject, MultipleSchemaError
+
+
+def test_schema_failures():
+    # Check impossibility of creating duplicate keys
+    assert_raises(MultipleSchemaError, Schema, {
+        Required('someString'): str,
+        Required('someString'): str
+    })
+    assert_raises(MultipleSchemaError, Schema, {
+        Required('someString', 'renamedToIdentical'): str,
+        Required('anotherString', 'renamedToIdentical'): str
+    })
+    assert_raises(MultipleSchemaError, Schema, {
+        Required('someString', 'renamedToExisting'): str,
+        Required('renamedToExisting'): str
+    })
 
 
 def test_required_and_optional():

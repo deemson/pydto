@@ -1,36 +1,36 @@
-PyDto - a Python data conversion and validation library
+PyDTO - a Python data conversion and validation library
 =======================================================
 
 ![Build Status](https://travis-ci.org/deemson/pydto.svg)
 ![Codecov](https://img.shields.io/codecov/c/github/deemson/pydto.svg)
 
-PyDto is a data conversion library. It can validate data, that comes from 
-various data serialization formats like JSON, YAML, etc. PyDto is heavily
+PyDTO is a data conversion library. It can validate data, that comes from 
+various data serialization formats like JSON, YAML, etc. PyDTO is heavily
 inspired by awesome data validation libraries
 [Voluptuos](https://github.com/alecthomas/voluptuous) and 
 [Schematics](https://github.com/schematics/schematics).
-PyDto tries to take the best from these libraries and adds a couple of things
+PyDTO tries to take the best from these libraries and adds a couple of things
 on top of their feature set.
 
-Like both these libraries, PyDto has:
+Like both these libraries, PyDTO has:
 
   - support for complex data structures;
   - validation for every field in data;
   - informative error messages.
 
 
-PyDto can also rename fields, effectively converting 
+PyDTO can also rename fields, effectively converting 
 data from one naming convention to another (e.g. from JSON camelCase
 to Python's snake_case).
 
-Let's look at features of PyDto using a series of small, self-explanatory
+Let's look at features of PyDTO using a series of small, self-explanatory
 examples. 
 
 ## Simple example ##
 
 Simple example: to use PyDTO you must first define a schema. Then, you pass an
-object to a schema in a function-like fashion. Schema returns another object,
-which is converted and validated:
+object to the schema in a function-like fashion. The schema returns
+converted and validated result:
 
 ```python
 from datetime import datetime
@@ -139,9 +139,9 @@ internally converted to FixedList object, i.e. instead of using `(str, int)` in 
 it is possble to use `[str, int]` or even `FixedList(str, int)`.
 
 
-## Error handling ##
+## Errors in a Schema object ##
 
-PyDTO will raise SchemaError if your schema is not constructed properly:
+PyDTO will raise MultipleSchemaError if your schema is not constructed properly:
 
 from pydto import Schema, Required
 
@@ -151,9 +151,46 @@ SCHEMA = Schema({
 })
 ```
 
-This code fragment will raise
-`pydto.SchemaError: <type 'object'> is not a valid value in schema`,
-as only callables allowed in Schema objects.
+This code fragment will write
+
+```
+pydto.MultipleSchemaError: 
+<type 'object'> is not a valid value in schema @ schema['aField']
+```
+
+as only callables allowed in Schema objects. MultipleSchemaError is an aggregator
+exception and will print every single error you have in your schema:
+
+```python
+from pydto import Schema, Required, Enum, FixedList
+
+SCHEMA = Schema({
+    Required('aInt'): int,
+    Required('aInt'): int,
+    Required('aInt2'): int,
+    Required('aInt2'): int,
+    Required('asdf'): Enum('string', object(), object()),
+    Required('asdfz'): FixedList({Required('a'): 1, Required('a'): 1})
+})
+```
+
+The code fragment above will print:
+
+```
+pydto.MultipleSchemaError: 
+duplicate names @ schema['asdfz'][0]['a']
+duplicate names @ schema['aInt2']
+only literal values allowed in Enum, got <object object at 0x7f0840c470e0> @ schema['asdf']
+only literal values allowed in Enum, got <object object at 0x7f0840c470f0> @ schema['asdf']
+duplicate names @ schema['aInt']
+```
+
+It is not advisable to catch MultipleSchemaError. An aggregator exception
+for schema error is presented in PyDTO just for convenience. In case of a 
+MultipleSchemaError you should rewrite your code object and ensure that 
+no errors are present in your schema.
+
+## Error handling during validation and conversion ##
 
 As for data validation error handling, PyDTO will raise aggregated MultipleInvalid exception
 for every error it encounters during validation:
@@ -187,3 +224,5 @@ except MultipleInvalid as mi:
 # required field is missing @ data['aDict']['aString']
 # invalid literal for int() with base 10: 'asdf' @ data['aDict']['aList'][1]['anInt']
 ```
+
+It is highly advisable to catch MultipleInvalid and react appropriately.
