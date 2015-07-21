@@ -94,6 +94,10 @@ class InclusiveInvalid(Invalid):
     """Inclusive field was missing, while other inclusives were present."""
 
 
+class ExclusiveInvalid(Invalid):
+    """Some or all mutually exclusive fields were present."""
+
+
 class UnknownInvalid(Invalid):
     """The key was not found in the schema."""
 
@@ -207,6 +211,7 @@ class Schema(object):
     def _compile_dict(self, dict_schema, extras):
         compiled_inner_schema = {}
         inclusive_monitors = defaultdict(set)
+        exclusive_monitors = defaultdict(set)
         source_names = set()
         destination_names = set()
         errors = []
@@ -239,7 +244,9 @@ class Schema(object):
             except Exception as e:
                 errors.append(SchemaError(str(e), [key.name]))
             if isinstance(key, Inclusive):
-                inclusive_monitors[key.monitor].add(key.name)
+                inclusive_monitors[key._monitor].add(key.name)
+            if isinstance(key, Exclusive):
+                inclusive_monitors[key._monitor].add(key.name)
         if errors:
             raise MultipleSchemaError(errors)
 
@@ -252,6 +259,7 @@ class Schema(object):
             data = dict(data)
             result = {}
             inclusive = defaultdict(set)
+            exclusive = defaultdict(set)
             errors = []
             for marker, converter in iteritems(compiled_inner_schema):
                 key = marker.name
@@ -259,7 +267,9 @@ class Schema(object):
                 if key in data:
                     try:
                         if isinstance(marker, Inclusive):
-                            inclusive[marker.monitor].add(key)
+                            inclusive[marker._monitor].add(key)
+                        if isinstance(marker, Exclusive):
+                            exclusive[marker._monitor].add(key)
                         value = converter(data.pop(key))
                         result[substitution_key] = value
                     except MultipleInvalid as e:
@@ -288,6 +298,14 @@ class Schema(object):
                             InclusiveInvalid('when fields %r are present, '
                                              'fields %r should be present too'
                                              % (list(missing), list(present))))
+            if exclusive:
+                for monitor, values in iteritems(exclusive):
+                    if len(values) > 1:
+                        errors.append(
+                            ExclusiveInvalid('fields %r are mutually exclusive'
+                                             ' and only one of them should be '
+                                             'present'
+                                             % list(values)))
             if data:
                 if extras == Extras.PREVENT:
                     for unknown_field in data.keys():
@@ -448,14 +466,104 @@ class Inclusive(Marker):
     ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid:
     ...     pass
+    >>> assert {} == schema({})
+
+    It is possible to create multiple independent groups of inclusive fields
+    using monitors:
+
+    >>> schema = Schema({
+    ...     Inclusive('one-one').monitor(1): str,
+    ...     Inclusive('one-two').monitor(1): str,
+    ...     Inclusive('two-one').monitor(2): str,
+    ...     Inclusive('two-two').monitor(2): str
+    ... })
+    >>> res = schema({'one-one': 'hello', 'one-two': 'world'})
+    >>> assert res == {'one-one': 'hello', 'one-two': 'world'}
+    >>> res = schema({'two-one': 'hello', 'two-two': 'world'})
+    >>> assert res == {'two-one': 'hello', 'two-two': 'world'}
+    >>> assert {} == schema({})
+    >>> res = schema({
+    ...     'one-one': 'hello', 'one-two': 'world',
+    ...     'two-one': 'oh hello', 'two-two': 'another world'
+    ... })
+    >>> assert res == {
+    ...     'one-one': 'hello', 'one-two': 'world',
+    ...     'two-one': 'oh hello', 'two-two': 'another world'
+    ... }
+    >>> try:
+    ...     schema({'one-one': 'hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> try:
+    ...     schema({'two-one': 'hello'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
     """
 
     def __init__(self, name, rename_to=None, monitor=None):
-        self.monitor = monitor
+        self._monitor = monitor
         super(Inclusive, self).__init__(name, rename_to)
 
     def monitor(self, monitor):
-        self.monitor = monitor
+        self._monitor = monitor
+        return self
+
+
+class Exclusive(Marker):
+    """
+    Exclusive is used to make several dictionary values mutually exclusive:
+
+    >>> schema = Schema({
+    ...     Exclusive('one'): str,
+    ...     Exclusive('two'): str
+    ... })
+    >>> res = schema({'one': 'hello'})
+    >>> assert res == {'one': 'hello'}
+    >>> res = schema({'two': 'hello'})
+    >>> assert res == {'two': 'hello'}
+    >>> try:
+    ...     schema({'one': 'hello', 'two': 'world'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> assert {} == schema({})
+
+    It is possible to create multiple independent groups of exclusive fields
+    using monitors:
+
+    >>> schema = Schema({
+    ...     Exclusive('one-one').monitor(1): str,
+    ...     Exclusive('one-two').monitor(1): str,
+    ...     Exclusive('two-one').monitor(2): str,
+    ...     Exclusive('two-two').monitor(2): str
+    ... })
+    >>> res = schema({'one-one': 'hello', 'two-one': 'world'})
+    >>> assert res == {'one-one': 'hello', 'two-one': 'world'}
+    >>> res = schema({'two-one': 'hello', 'one-two': 'world'})
+    >>> assert res == {'two-one': 'hello', 'one-two': 'world'}
+    >>> try:
+    ...     schema({'one-one': 'hello', 'one-two': 'world'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> try:
+    ...     schema({'two-one': 'hello', 'two-two': 'world'})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> assert {} == schema({})
+
+    """
+
+    def __init__(self, name, rename_to=None, monitor=None):
+        self._monitor = monitor
+        super(Exclusive, self).__init__(name, rename_to)
+
+    def monitor(self, monitor):
+        self._monitor = monitor
         return self
 
 
