@@ -1,3 +1,8 @@
+v0.4.1
+======
+
+- Inclusive and Exclusive added
+
 v0.4.0
 ======
 

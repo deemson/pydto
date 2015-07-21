@@ -12,7 +12,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 
 
 class Error(Exception):
