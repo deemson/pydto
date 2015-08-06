@@ -12,7 +12,7 @@ else:
     strtype = basestring
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.4.1'
+__version__ = '0.4.2'
 
 
 class Error(Exception):
@@ -202,6 +202,8 @@ class Schema(object):
         elif isinstance(schema, MakeObject):
             extras = schema.extras or self.extras
             return self._compile_make_object(schema, extras)
+        elif isinstance(schema, FromObject):
+            return self._compile_from_object(schema)
         elif callable(schema):
             return schema
         else:
@@ -417,8 +419,8 @@ class Schema(object):
 
         return compiled_fixed_list
 
-    def _compile_make_object(cls, make_object_schema, extras):
-        compiled_dict = cls._compile_dict(make_object_schema.inner_schema,
+    def _compile_make_object(self, make_object_schema, extras):
+        compiled_dict = self._compile_dict(make_object_schema.inner_schema,
                                           extras)
 
         def compiled_make_object(data):
@@ -431,6 +433,112 @@ class Schema(object):
                 return o
 
         return compiled_make_object
+
+    def _compile_from_object(self, from_object_schema):
+        compiled_inner_schema = {}
+        inclusive_monitors = defaultdict(set)
+        exclusive_monitors = defaultdict(set)
+        source_names = set()
+        destination_names = set()
+        errors = []
+        for key, value in iteritems(from_object_schema.inner_schema):
+            if not isinstance(key, Marker):
+                errors.append(SchemaError('keys in schema dictionaries must'
+                                          ' be instances of Marker class',
+                                          [repr(key)]))
+                continue
+            if key.name in source_names:
+                errors.append(SchemaError('duplicate names',
+                                          [key.name]))
+                continue
+            if key.rename_to in destination_names:
+                errors.append(SchemaError('duplicate names',
+                                          [key.rename_to]))
+                continue
+            source_names.add(key.name)
+            destination_names.add(key.rename_to)
+            try:
+                compiled_inner_schema[key] = self._compile(value)
+            except MultipleSchemaError as e:
+                errs = [ie for ie in e.errors]
+                for e in errs:
+                    e.path = [key.name] + e.path
+                errors.extend(errs)
+            except SchemaError as e:
+                e.path = [key.name] + e.path
+                errors.append(e)
+            except Exception as e:
+                errors.append(SchemaError(str(e), [key.name]))
+            if isinstance(key, Inclusive):
+                inclusive_monitors[key._monitor].add(key.name)
+            if isinstance(key, Exclusive):
+                inclusive_monitors[key._monitor].add(key.name)
+        if errors:
+            raise MultipleSchemaError(errors)
+
+        def compiled_from_object(data):
+            if not isinstance(data, from_object_schema.object_class):
+                raise TypeError('expected %s instance',
+                                from_object_schema.object_class)
+
+            # Make a copy of incoming dictionary to pop items
+            # without changing data
+            result = {}
+            inclusive = defaultdict(set)
+            exclusive = defaultdict(set)
+            errors = []
+            for marker, converter in iteritems(compiled_inner_schema):
+                key = marker.name
+                substitution_key = marker.rename_to or key
+                key_val = getattr(data, key)
+                if key_val:
+                    try:
+                        if isinstance(marker, Inclusive):
+                            inclusive[marker._monitor].add(key)
+                        if isinstance(marker, Exclusive):
+                            exclusive[marker._monitor].add(key)
+                        value = converter(key_val)
+                        result[substitution_key] = value
+                    except MultipleInvalid as e:
+                        errs = [ie for ie in e.errors]
+                        for e in errs:
+                            e.path = [key] + e.path
+                        errors.extend(errs)
+                    except Invalid as e:
+                        e.path = [key] + e.path
+                        errors.append(e)
+                    except Exception as e:
+                        errors.append(Invalid(str(e), [key]))
+
+                else:
+                    if isinstance(marker, Required):
+                        errors.append(
+                            RequiredInvalid('required field is missing',
+                                            [key]))
+            if inclusive:
+                for monitor, values in iteritems(inclusive):
+                    missing = inclusive_monitors[monitor] - values
+                    if missing:
+                        present = inclusive_monitors[monitor].intersection(
+                            values)
+                        errors.append(
+                            InclusiveInvalid('when fields %r are present, '
+                                             'fields %r should be present too'
+                                             % (list(missing), list(present))))
+            if exclusive:
+                for monitor, values in iteritems(exclusive):
+                    if len(values) > 1:
+                        errors.append(
+                            ExclusiveInvalid('fields %r are mutually exclusive'
+                                             ' and only one of them should be '
+                                             'present'
+                                             % list(values)))
+
+            if errors:
+                raise MultipleInvalid(errors)
+            return result
+
+        return compiled_from_object
 
 
 class Marker(object):
@@ -778,6 +886,38 @@ class MakeObject(SpecialForm):
         self.extras = extras
 
 
+class FromObject(SpecialForm):
+    """
+
+    Marks a field in a schema for an object-to-dict conversion:
+
+    >>> class User(object):
+    ...     def __init__(self, first_name, last_name, birth_date):
+    ...         self.first_name = first_name
+    ...         self.last_name = last_name
+    ...         self.birth_date = birth_date
+    >>> schema = Schema(FromObject(User, {
+    ...     Required('first_name'): str,
+    ...     Required('last_name'): str,
+    ...     Required('birth_date'): FormatDateTime('%Y-%m-%d')
+    ... }))
+    >>> user = schema(User(
+    ...     'John',
+    ...     'Smith',
+    ...     datetime(1977, 8, 5)
+    ... ))
+    >>> assert user
+    >>> assert isinstance(user, dict)
+    >>> assert 'John' == user['first_name']
+    >>> assert 'Smith' == user['last_name']
+    >>> assert '1977-08-05' == user['birth_date']
+    """
+
+    def __init__(self, object_class, inner_schema):
+        self.object_class = object_class
+        self.inner_schema = inner_schema
+
+
 class FixedList(SpecialForm):
     """
     Marks a field in a schema as a list of fixed length. Every element in the
@@ -961,6 +1101,51 @@ class ParseDateTime(object):
             return datetime.strptime(value, self.datetime_format)
         except (TypeError, ValueError) as e:
             raise TypeInvalid('bad datetime %r: %r' % (value, e))
+
+
+class FormatDateTime(object):
+    """
+    Formats datetime into a string:
+
+    >>> schema = Schema({Required('aDateTime'): FormatDateTime()})
+    >>> dt = schema({'aDateTime': datetime(2000, 5, 1, 12, 36, 51)})
+    >>> assert dt
+    >>> assert 'aDateTime' in dt
+    >>> assert isinstance(dt['aDateTime'], str)
+    >>> assert '2000-05-01 12:36:51' == dt['aDateTime']
+
+    Datetime can only be formatted from datetime objects:
+
+    >>> schema = Schema({Required('aDateTime'): FormatDateTime()})
+    >>> try:
+    ...     schema({'aDateTime': 5})
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    Incorrect datetime formats will raise error upon the schema creation:
+
+    >>> try:
+    ...     schema = Schema({Required('aDateTime'): FormatDateTime('%123')})
+    ...     assert False, "an exception should've been raised"
+    ... except SchemaError:
+    ...     pass
+
+    """
+
+    def __init__(self, datetime_format='%Y-%m-%d %H:%M:%S'):
+        try:
+            datetime.strptime(datetime.utcnow().strftime(datetime_format),
+                              datetime_format)
+        except (TypeError, ValueError) as e:
+            raise SchemaError(
+                'bad datetime format %r: %r' % (datetime_format, e))
+        self.datetime_format = datetime_format
+
+    def __call__(self, value):
+        if not isinstance(value, datetime):
+            raise TypeInvalid('datetime can only be parsed from string')
+        return value.strftime(self.datetime_format)
 
 
 class UnvalidatedDict(object):
