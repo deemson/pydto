@@ -390,8 +390,9 @@ class Schema(object):
         if extras == Extras.INHERIT:
             raise SchemaError('top Schema level extras cannot be inherited')
         compiler = _Compiler(extras, substitutions={
+            tuple: Chain.from_iterable,
             dict: Dict,
-            (list, tuple): FixedList.from_iterable,
+            list: FixedList.from_iterable,
             set: Enum.from_iterable,
             PRIMITIVE_TYPES: Literal
         })
@@ -912,14 +913,13 @@ class FixedList(_Compilable):
     >>> res = schema(['asd', '43.7', '8'])
     >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
 
-    You can use Python's list or tuple data types for
-    FixedList specification:
+    You can use Python's list data type for FixedList specification:
 
     >>> schema = Schema([str, parse_decimal, int])
     >>> res = schema(['asd', '43.7', '8'])
     >>> assert ['asd', decimal.Decimal('43.7'), 8] == res
 
-    >>> schema = Schema((ParseDateTime('%Y-%m-%d %H:%M.%S'), parse_decimal))
+    >>> schema = Schema([ParseDateTime('%Y-%m-%d %H:%M.%S'), parse_decimal])
     >>> res = schema(['1985-12-1 15:36.21', '12.2'])
     >>> assert datetime(1985, 12, 1, 15, 36, 21) == res[0]
     >>> assert decimal.Decimal('12.2') == res[1]
@@ -1283,7 +1283,7 @@ class UnvalidatedList(object):
         return data
 
 
-class Chain(object):
+class Chain(_Compilable):
     """
     Convenience object to chain validators:
 
@@ -1307,6 +1307,17 @@ class Chain(object):
     ...     assert False, "an exception should've been raised"
     ... except MultipleInvalid:
     ...     pass
+
+    You can use Python's tuple data type for Chain specification:
+
+    >>> schema = Schema((str, Length(min=5)))
+    >>> assert 'asdfg' == schema('asdfg')
+    >>> try:
+    ...     schema('as')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
     """
 
     def _assert_callable(self, f):
@@ -1318,6 +1329,17 @@ class Chain(object):
         for f in validators:
             self._assert_callable(f)
         self.validators = validators
+
+    @classmethod
+    def from_iterable(cls, validators):
+        return cls(*validators)
+
+    def _compile(self, compiler):
+        compiled_validators = []
+        for f in self.validators:
+            compiled_validators.append(compiler.compile(f))
+        self.validators = compiled_validators
+        return self
 
     def __call__(self, data):
         for f in self.validators:
