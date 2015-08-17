@@ -17,7 +17,7 @@ else:
                        complex, bool)
 
 __author__ = 'Dmitry Kurkin'
-__version__ = '0.5.0'
+__version__ = '0.5.1'
 
 
 @contextmanager
@@ -179,6 +179,14 @@ class EnumInvalid(Invalid):
 
 class NoneInvalid(Invalid):
     """Got None value."""
+
+
+class LengthInvalid(Invalid):
+    """Incorrect length."""
+
+
+class RangeInvalid(Invalid):
+    """Data is not in specified range."""
 
 
 class Undefined(object):
@@ -975,40 +983,13 @@ def not_none(value):
         return value
 
 
-class NotNone(object):
-    """
-    A convenience decorator alternative to not_none function:
-
-    >>> schema = Schema(NotNone(int))
-    >>> assert 5 == schema('5')
-    >>> try:
-    ...     schema(None)
-    ...     assert False, "an exception should've been raised"
-    ... except MultipleInvalid:
-    ...     pass
-
-    """
-
-    def __init__(self, f):
-        if not callable(f):
-            raise SchemaError('NotNone is applicable only to callables')
-        self._f = f
-
-    def __call__(self, value):
-        return self._f(not_none(value))
-
-
-TRUE_VALUES = ['true', 't', 'yes', 'y', '1']
-FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
-
-
-def strict_boolean(value):
+class StrictBoolean(object):
     """
     Consider using this class instead of good ol' bool if you need to ensure,
     that your True and False values are parsed from a narrow set of allowed
     values:
 
-    >>> schema = Schema(strict_boolean)
+    >>> schema = Schema(StrictBoolean())
     >>> assert schema('yes')
     >>> assert not schema('no')
     >>> try:
@@ -1018,18 +999,26 @@ def strict_boolean(value):
     ...     pass
 
     """
-    if value in [True, False]:
-        return value
-    else:
-        value = str(value)
-        if value in TRUE_VALUES:
-            return True
-        elif value in FALSE_VALUES:
-            return False
+    TRUE_VALUES = ['true', 't', 'yes', 'y', '1']
+    FALSE_VALUES = ['false', 'f', 'no', 'n', '0']
+
+    def __init__(self, true_values=TRUE_VALUES, false_values=FALSE_VALUES):
+        self.true_values = true_values
+        self.false_values = false_values
+
+    def __call__(self, value):
+        if value in [True, False]:
+            return value
         else:
-            raise TypeError('value should be one of %r to be considered '
-                            'True or one of %r to be considered False'
-                            % (TRUE_VALUES, FALSE_VALUES))
+            value = str(value)
+            if value in self.true_values:
+                return True
+            elif value in self.false_values:
+                return False
+            else:
+                raise TypeError('value should be one of %r to be considered '
+                                'True or one of %r to be considered False'
+                                % (self.true_values, self.false_values))
 
 
 def parse_decimal(value):
@@ -1160,6 +1149,91 @@ class FormatDateTime(object):
         return value.strftime(self.datetime_format)
 
 
+class Length(object):
+    """
+    Ensures that the object validated is of specified length
+
+    >>> schema = Schema(Length(2, 3))
+    >>> assert 'as' == schema('as')
+    >>> assert [3, 5] == schema([3, 5])
+    >>> try:
+    ...     schema('a')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> try:
+    ...     schema('asdfg')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+
+    def __init__(self, min=None, max=None):
+        if min is None and max is None:
+            raise SchemaError('Length should include at least min or max'
+                              'value as a valid integer')
+        self.min = int(min) if min else None
+        self.max = int(max) if max else None
+
+    def __call__(self, data):
+        l = len(data)
+        if self.min is not None and l < self.min:
+            raise LengthInvalid('data should have a langth at least of %d' % l)
+        if self.max is not None and l > self.max:
+            raise LengthInvalid('data should have a langth at most of %d' % l)
+        return data
+
+
+class Range(object):
+    """
+    Ensures that the object validated is in specified range:
+
+    >>> schema = Schema(Range(3, 5))
+    >>> assert 4 == schema(4)
+    >>> try:
+    ...     schema(3)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+    >>> schema = Schema(Range(3, 5, min_inclusive=True))
+    >>> assert 3 == schema(3)
+    >>> try:
+    ...     schema(2)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+
+    def __init__(self, min=None, max=None,
+                 min_inclusive=False, max_inclusive=False):
+        if min is None and max is None:
+            raise SchemaError('Length should include at least min or max'
+                              'value as a valid integer')
+        self.min = int(min) if min else None
+        self.max = int(max) if max else None
+        self.min_inclusive = min_inclusive
+        self.max_inclusive = max_inclusive
+
+    def __call__(self, data):
+        if self.min is not None:
+            if self.min_inclusive:
+                is_min_ok = data >= self.min
+            else:
+                is_min_ok = data > self.min
+            if not is_min_ok:
+                raise Range('data should be at least %r' % self.min)
+        if self.max is not None:
+            if self.max_inclusive:
+                is_max_ok = data <= self.max
+            else:
+                is_max_ok = data < self.max
+            if not is_max_ok:
+                raise Range('data should be at most %r' % self.max)
+        return data
+
+
 class UnvalidatedDict(object):
     """
 
@@ -1209,47 +1283,43 @@ class UnvalidatedList(object):
         return data
 
 
-class And(object):
+class Chain(object):
     """
+    Convenience object to chain validators:
 
-    Successively applies a list of callables to a value:
-
-    >>> schema = Schema(And(not_none, int))
-    >>> assert 5 == schema('5')
+    >>> schema = Schema(Chain(str, Length(min=5)))
+    >>> assert 'asdfg' == schema('asdfg')
     >>> try:
-    ...     schema(None)
+    ...     schema('as')
     ...     assert False, "an exception should've been raised"
-    ... except MultipleInvalid as e:
-    ...     assert isinstance(e.errors[0], NoneInvalid)
-
-    The list of callables must not be empty:
-
-    >>> try:
-    ...     schema = Schema(And())
-    ...     assert False, "an exception should've been raised"
-    ... except SchemaError:
+    ... except MultipleInvalid:
     ...     pass
 
-    And there must be no objects other than callables:
-
+    >>> schema = Schema(Chain(int, Range(5, 8)))
+    >>> assert 6 == schema('6')
     >>> try:
-    ...     schema = Schema(And(1))
+    ...     schema('9')
     ...     assert False, "an exception should've been raised"
-    ... except SchemaError:
+    ... except MultipleInvalid:
     ...     pass
-
+    >>> try:
+    ...     schema('5')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
     """
 
-    def __init__(self, *functions):
-        if not functions:
-            raise SchemaError('no functions provided to And')
-        for f in functions:
-            if not callable(f):
-                raise SchemaError('only callables can be passed to And')
-        self._functions = functions
+    def _assert_callable(self, f):
+        if not callable(f):
+            raise SchemaError('only callables should be passed'
+                              ' to "To" objects')
+
+    def __init__(self, *validators):
+        for f in validators:
+            self._assert_callable(f)
+        self.validators = validators
 
     def __call__(self, data):
-        value = data
-        for f in self._functions:
-            value = f(value)
-        return value
+        for f in self.validators:
+            data = f(data)
+        return data
