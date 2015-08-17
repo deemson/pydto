@@ -1,3 +1,8 @@
+v0.5.0
+======
+
+- Schema compilation process reworked. No API changes.
+
 v0.4.2
 ======
 
