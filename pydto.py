@@ -983,6 +983,56 @@ def not_none(value):
         return value
 
 
+class NotNone(object):
+    """
+    A convenience decorator alternative to not_none function:
+
+    >>> schema = Schema(NotNone(int))
+    >>> assert 5 == schema('5')
+    >>> try:
+    ...     schema(None)
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+    """
+
+    def __init__(self, f):
+        if not callable(f):
+            raise SchemaError('NotNone is applicable only to callables')
+        self._f = f
+
+    def __call__(self, value):
+        return self._f(not_none(value))
+
+
+class Nullable(object):
+    """
+    This decorator returns None for None values otherwise the value is intact
+
+    >>> schema = Schema(Nullable(int))
+    >>> assert 5 == schema('5')
+    >>> assert None == schema(None)
+    >>> try:
+    ...     schema('a')
+    ...     assert False, "an exception should've been raised"
+    ... except MultipleInvalid:
+    ...     pass
+
+
+    """
+
+    def __init__(self, f):
+        if not callable(f):
+            raise SchemaError('Nullable is applicable only to callables')
+        self._f = f
+
+    def __call__(self, value):
+        if value is None:
+            return None
+        return self._f(value)
+
+
 class StrictBoolean(object):
     """
     Consider using this class instead of good ol' bool if you need to ensure,
