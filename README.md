@@ -5,8 +5,8 @@ PyDTO - a Python data conversion and validation library
 ![Codecov](https://img.shields.io/codecov/c/github/deemson/pydto.svg)
 
 PyDTO is a data validation and conversion library. 
-It can validate data and convert data, that comes from 
-various data transfer formats like JSON, YAML, etc. PyDTO is heavily
+It can validate and convert data, that comes from 
+various transfer formats like JSON, YAML, etc. PyDTO is heavily
 inspired by awesome data validation libraries
 [Voluptuos](https://github.com/alecthomas/voluptuous) and 
 [Schematics](https://github.com/schematics/schematics).
